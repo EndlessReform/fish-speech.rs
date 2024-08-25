@@ -1,0 +1,5 @@
+huggingface-hub
+torch
+safetensors
+ipykernel
+numpy<2.0.0
