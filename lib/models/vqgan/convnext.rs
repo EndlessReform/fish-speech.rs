@@ -1,34 +1,14 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
-use candle_core::{Error, Result, Tensor, Var};
-use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, Sequential, VarBuilder};
-
-#[derive(Clone)]
-pub struct Config {
-    input_channels: usize,
-    depths: [usize; 4],
-    dims: [usize; 4],
-    kernel_size: usize,
-    drop_path_rate: f64,
-}
-
-impl Config {
-    /// Config from Fish Speech 1.2 SFT
-    pub fn fish_1_2() -> Self {
-        Self {
-            input_channels: 160,
-            depths: [3, 3, 9, 3],
-            dims: [128, 256, 384, 512],
-            drop_path_rate: 0.2,
-            kernel_size: 7,
-        }
-    }
-}
+use candle_core::{Error, Result, Tensor};
+use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
 struct ConvNeXtBlockConfig {
     pub dim: usize,
-    pub drop_path: f64,
-    pub layer_scale_init_value: f64,
+    /// Unused except for training
+    pub _drop_path: f64,
+    /// Unused except for training
+    pub _layer_scale_init_value: f64,
     pub mlp_ratio: usize,
     pub kernel_size: usize,
     pub dilation: usize,
@@ -38,8 +18,8 @@ impl Default for ConvNeXtBlockConfig {
     fn default() -> Self {
         ConvNeXtBlockConfig {
             dim: 0, // Must be set explicitly
-            drop_path: 0.0,
-            layer_scale_init_value: 1e-6,
+            _drop_path: 0.0,
+            _layer_scale_init_value: 1e-6,
             mlp_ratio: 4,
             kernel_size: 7,
             dilation: 1,
@@ -159,12 +139,14 @@ impl Module for LayerNormChannelsFirst {
 }
 
 pub struct ConvNeXtEncoderConfig {
-    input_channels: usize,
-    depths: Vec<usize>,
-    dims: Vec<usize>,
-    drop_path_rate: f64,
-    layer_scale_init_value: f64,
-    kernel_size: usize,
+    pub input_channels: usize,
+    pub depths: Vec<usize>,
+    pub dims: Vec<usize>,
+    pub kernel_size: usize,
+    /// Unused except for training
+    pub _drop_path_rate: f64,
+    /// Unused except for training
+    pub _layer_scale_init_value: f64,
 }
 
 impl Default for ConvNeXtEncoderConfig {
@@ -173,8 +155,8 @@ impl Default for ConvNeXtEncoderConfig {
             input_channels: 3,
             depths: vec![3, 3, 9, 3],
             dims: vec![96, 192, 384, 768],
-            drop_path_rate: 0.0,
-            layer_scale_init_value: 1e-6,
+            _drop_path_rate: 0.0,
+            _layer_scale_init_value: 1e-6,
             kernel_size: 7,
         }
     }
@@ -187,7 +169,7 @@ pub struct ConvNeXtEncoder {
 }
 
 impl ConvNeXtEncoder {
-    fn load(vb: VarBuilder, config: &ConvNeXtEncoderConfig) -> Result<ConvNeXtEncoder> {
+    pub fn load(vb: VarBuilder, config: &ConvNeXtEncoderConfig) -> Result<ConvNeXtEncoder> {
         if config.depths.len() != config.dims.len() {
             return Err(Error::debug(format!(
                 "ConvNeXtEncoder depths and dims do not match: {}, {}",
