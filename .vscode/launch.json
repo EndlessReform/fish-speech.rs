@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug fish-speech-candle main encode loop",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=fish-speech-candle",
+          "--package=fish-speech-candle"
+        ],
+        "filter": {
+          "name": "fish-speech-candle",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "--checkpoint-path",
+        "./notebooks/firefly-gan-vq-fsq-4x1024-42hz-generator.safetensors",
+        "--input",
+        "./tests/resources/ja-1.wav"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

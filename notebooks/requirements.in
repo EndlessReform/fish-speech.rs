@@ -3,3 +3,4 @@ torch
 safetensors
 ipykernel
 numpy<2.0.0
+librosa

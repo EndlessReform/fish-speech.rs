@@ -13,6 +13,21 @@ pub struct AudioConfig {
     pub hop_length: usize,
 }
 
+impl Default for AudioConfig {
+    fn default() -> Self {
+        AudioConfig {
+            // Number of mel bins from the fish 1.2 config
+            num_mel_bins: 160,
+            // Sample rate in Hz
+            sample_rate: 44100,
+            // Size of the FFT window
+            n_fft: 2048,
+            // Number of samples between successive frames
+            hop_length: 512,
+        }
+    }
+}
+
 pub fn load_audio<P: AsRef<Path>>(
     path: P,
     config: &AudioConfig,
@@ -113,6 +128,7 @@ fn load_mel_filters(num_mel_bins: usize) -> Result<Vec<f32>> {
     let mel_bytes = match num_mel_bins {
         80 => include_bytes!("melfilters.bytes").as_slice(),
         128 => include_bytes!("melfilters128.bytes").as_slice(),
+        160 => include_bytes!("melfilters160.bytes").as_slice(),
         _ => bail!("Unexpected num_mel_bins {}", num_mel_bins),
     };
 
