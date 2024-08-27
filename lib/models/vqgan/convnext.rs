@@ -65,17 +65,17 @@ impl ConvNeXtBlock {
             vb.get(config.dim, "norm.bias")?,
             1e-6,
         );
+        // These are saved in the weight dict as 1d convolutions for some stupid reason
         let pwconv1 = Linear::new(
             vb.get(
-                (config.dim, config.dim * config.mlp_ratio),
+                (config.dim * config.mlp_ratio, config.dim),
                 "pwconv1.weight",
             )?,
             Some(vb.get(config.dim * config.mlp_ratio, "pwconv1.bias")?),
         );
-        // Note to self: you can just call `.gelu()` on a tensor
         let pwconv2 = Linear::new(
             vb.get(
-                (config.dim * config.mlp_ratio, config.dim),
+                (config.dim, config.dim * config.mlp_ratio),
                 "pwconv2.weight",
             )?,
             Some(vb.get(config.dim, "pwconv2.bias")?),
@@ -103,7 +103,7 @@ impl Module for ConvNeXtBlock {
         let mut x = self.pwconv2.forward(&x)?;
 
         if let Some(gamma) = &self.gamma {
-            x = gamma.mul(&x)?;
+            x = gamma.broadcast_mul(&x)?;
         }
         x = x.permute((0, 2, 1))?;
         // I will come to regret forcing applying residual...
@@ -131,10 +131,12 @@ impl LayerNormChannelsFirst {
 impl Module for LayerNormChannelsFirst {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let u = xs.mean_keepdim(1)?;
-        let s = (xs.sub(&u)?).powf(2.0)?.mean_keepdim(1)?;
-        let x = xs.sub(&u)?.div(&(&s + self.eps)?.sqrt()?)?;
-        let x = x.broadcast_mul(&self.weight)?;
-        x.broadcast_add(&self.bias)
+        let s = (xs.broadcast_sub(&u)?).powf(2.0)?.mean_keepdim(1)?;
+        let x = xs
+            .broadcast_sub(&u)?
+            .broadcast_div(&(&s + self.eps)?.sqrt()?)?;
+        let x = x.broadcast_mul(&self.weight.unsqueeze(1)?)?;
+        x.broadcast_add(&self.bias.unsqueeze(1)?)
     }
 }
 
@@ -184,7 +186,7 @@ impl ConvNeXtEncoder {
         let stem = seq();
         let stem = stem.add(Conv1d::new(
             vb_ds.get(
-                (config.input_channels, config.dims[0], config.kernel_size),
+                (config.dims[0], config.input_channels, config.kernel_size),
                 "0.0.weight",
             )?,
             vb_ds.get(config.dims[0], "0.0.bias").ok(),
@@ -195,11 +197,14 @@ impl ConvNeXtEncoder {
                 dilation: 1,
             },
         ));
-        let stem = stem.add(LayerNormChannelsFirst::load(vb.pp("0.1"), config.dims[0])?);
+        let stem = stem.add(LayerNormChannelsFirst::load(
+            vb_ds.pp("0.1"),
+            config.dims[0],
+        )?);
         let mut downsample_layers: Vec<Box<dyn Module>> = vec![Box::new(stem)];
 
         for idx in 1..config.depths.len() {
-            let vb_stem = vb.pp(format!("{}", idx));
+            let vb_stem = vb_ds.pp(format!("{}", idx));
             let mid_layer = seq();
             let mid_layer = mid_layer.add(LayerNormChannelsFirst::load(
                 vb_stem.pp("0"),
@@ -207,8 +212,8 @@ impl ConvNeXtEncoder {
             )?);
 
             let mid_layer = mid_layer.add(Conv1d::new(
-                vb.get((config.dims[idx - 1], config.dims[idx]), "1.weight")?,
-                Some(vb.get(config.dims[idx], "1.bias")?),
+                vb_stem.get((config.dims[idx], config.dims[idx - 1], 1), "1.weight")?,
+                Some(vb_stem.get(config.dims[idx], "1.bias")?),
                 Conv1dConfig {
                     stride: 1,
                     groups: 1,

@@ -36,7 +36,8 @@ fn main() -> Result<()> {
     };
 
     let encoder = FireflyArchitecture::load(vb)?;
-    let result = encoder.encode(&audio);
+    let result = encoder.encode(&audio)?;
+    println!("{:?}", result);
 
     Ok(())
 }
