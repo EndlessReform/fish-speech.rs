@@ -1,7 +1,11 @@
 pub mod convnext;
+mod grouped_residual_fsq;
+pub mod quantizer;
+
 use candle_core::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
+use quantizer::{DownsampleFSQConfig, DownsampleFiniteScalarQuantizer};
 
 #[derive(Clone)]
 /// Incomplete. Will go back and fix it soon
@@ -28,6 +32,7 @@ impl Config {
 
 pub struct FireflyArchitecture {
     backbone: ConvNeXtEncoder,
+    quantizer: DownsampleFiniteScalarQuantizer,
 }
 
 impl FireflyArchitecture {
@@ -44,11 +49,21 @@ impl FireflyArchitecture {
                 ..Default::default()
             },
         )?;
-        Ok(Self { backbone })
+        let quantizer = DownsampleFiniteScalarQuantizer::load(
+            vb.pp("quantizer"),
+            // TODO: Parameterize this
+            DownsampleFSQConfig::firefly_1_2(),
+        )?;
+        Ok(Self {
+            backbone,
+            quantizer,
+        })
     }
 
     pub fn encode(self, audios: &Tensor) -> Result<Tensor> {
-        // TODO: everything basically
-        self.backbone.forward(audios)
+        // TODO: Preprocessing
+        let x = self.backbone.forward(audios)?;
+        self.quantizer.downsample(&x)
+        // TODO: Postprocessing
     }
 }

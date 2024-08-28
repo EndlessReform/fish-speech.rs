@@ -3,7 +3,7 @@
 use candle_core::{Error, Result, Tensor};
 use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
-struct ConvNeXtBlockConfig {
+pub struct ConvNeXtBlockConfig {
     pub dim: usize,
     /// Unused except for training
     pub _drop_path: f64,
@@ -29,14 +29,15 @@ impl Default for ConvNeXtBlockConfig {
 
 impl ConvNeXtBlockConfig {
     pub fn with_dim(dim: usize) -> Self {
-        let mut config = Self::default();
-        config.dim = dim;
-        config
+        Self {
+            dim,
+            ..Default::default()
+        }
     }
 }
 
 #[derive(Clone)]
-struct ConvNeXtBlock {
+pub struct ConvNeXtBlock {
     dwconv: Conv1d,
     norm: LayerNorm,
     pwconv1: Linear,
@@ -45,12 +46,9 @@ struct ConvNeXtBlock {
 }
 
 impl ConvNeXtBlock {
-    fn load(vb: VarBuilder, config: &ConvNeXtBlockConfig) -> Result<ConvNeXtBlock> {
+    pub fn load(vb: VarBuilder, config: &ConvNeXtBlockConfig) -> Result<ConvNeXtBlock> {
         let dwconv = Conv1d::new(
-            vb.get(
-                (config.dim, 1 as usize, config.kernel_size),
-                "dwconv.weight",
-            )?,
+            vb.get((config.dim, 1_usize, config.kernel_size), "dwconv.weight")?,
             Some(vb.get(config.dim, "dwconv.bias")?),
             Conv1dConfig {
                 padding: (config.dilation as f64 * (config.kernel_size as f64 - 1.0) / 2.0).round()
@@ -178,7 +176,7 @@ impl ConvNeXtEncoder {
                 config.depths.len(),
                 config.dims.len()
             )));
-        } else if config.depths.len() == 0 {
+        } else if config.depths.is_empty() {
             return Err(Error::debug("ConvNeXtEncoder depth cannot be 0"));
         };
         let vb_ds = vb.pp("downsample_layers");
