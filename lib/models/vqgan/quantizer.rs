@@ -5,6 +5,8 @@ use candle_nn::{
     VarBuilder,
 };
 
+// https://github.com/fishaudio/fish-speech/blob/9e2f5e6b3a382849b8ee54da10d6a68bbd913f4d/fish_speech/models/vqgan/modules/fsq.py#L4
+
 pub struct DownsampleFSQConfig {
     input_dim: usize,
     n_codebooks: usize,
