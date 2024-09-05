@@ -1,6 +1,6 @@
 pub mod convnext;
 mod fsq;
-// mod grouped_residual_fsq;
+mod grouped_residual_fsq;
 pub mod quantizer;
 
 use candle_core::{Result, Tensor};

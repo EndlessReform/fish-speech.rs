@@ -3,9 +3,9 @@ use candle_nn::{Linear, VarBuilder};
 
 #[derive(Debug, Clone)]
 pub struct FSQConfig {
-    levels: Vec<u32>,
-    n_codebooks: usize,
-    input_dim: usize,
+    pub levels: Vec<u32>,
+    pub n_codebooks: usize,
+    pub input_dim: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +160,11 @@ impl FSQ {
         Ok(codes_non_centered)
     }
 
+    pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
+        let codes = self.indices_to_codes(indices)?;
+        let out = self.project_out.forward(&codes)?;
+        Ok(out)
+    }
     fn _scale_and_shift_inverse(&self, zhat: &Tensor) -> Result<Tensor> {
         let half_width = self.levels.div(&Tensor::full(
             2.0,
