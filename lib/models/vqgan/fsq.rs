@@ -54,7 +54,7 @@ impl FSQ {
         let codebook_dim = levels.len();
         let effective_codebook_dim = codebook_dim * n_codebooks;
 
-        let levels = Tensor::from_slice(levels.as_slice(), 1, device)?;
+        let levels = Tensor::from_slice(levels.as_slice(), levels.len(), device)?;
         let mut basis = Vec::with_capacity(codebook_dim);
         basis.push(1);
         for i in 1..codebook_dim {

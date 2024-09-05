@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], DType::F32, &device)?
     };
 
-    // let encoder = FireflyArchitecture::load(vb)?;
+    let encoder = FireflyArchitecture::load(vb)?;
     // let result = encoder.encode(&audio)?;
     // println!("{:?}", result);
 

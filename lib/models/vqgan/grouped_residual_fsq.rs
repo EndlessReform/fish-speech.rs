@@ -7,33 +7,30 @@ pub struct ResidualFSQConfig {
     dim: usize,
     levels: Vec<u32>,
     num_quantizers: usize,
-    groups: usize,
 }
 
 pub struct ResidualFSQ {
     layers: Vec<FSQ>,
-    scales: Vec<Tensor>,
+    scales: Vec<f32>,
     num_quantizers: usize,
 }
 
 impl ResidualFSQ {
     pub fn load(vb: VarBuilder, config: &ResidualFSQConfig) -> Result<Self> {
-        let device = vb.device();
         let num_quantizers = config.num_quantizers;
         let mut layers = Vec::with_capacity(num_quantizers);
-        let levels_tensor = Tensor::new(config.levels.as_slice(), device)?;
 
         // Calculate scales
-        let mut scales = Vec::with_capacity(num_quantizers);
-        for ind in 0..num_quantizers {
-            let scale = (&levels_tensor.sub(&Tensor::new(&[1.0], device)?)?)
-                .pow(&Tensor::new(&[-(ind as i64)], vb.device())?)?;
-            scales.push(scale);
-        }
+        let scales: Vec<f32> = (0..num_quantizers)
+            .map(|ind| {
+                let base: f32 = (config.levels[0] - 1) as f32;
+                base.powi(-(ind as i32))
+            })
+            .collect();
 
         for ind in 0..num_quantizers {
             layers.push(FSQ::load(
-                vb.pp(format!("rvqs.{}.", ind)),
+                vb.clone(),
                 &FSQConfig {
                     levels: config.levels.clone(),
                     input_dim: config.dim,
@@ -55,9 +52,8 @@ impl ResidualFSQ {
         let mut all_indices = Vec::with_capacity(self.num_quantizers);
 
         for (layer, scale) in self.layers.iter().zip(self.scales.iter()) {
-            let scale = scale.squeeze(0)?;
-            let (quantized, indices) = layer.forward(&(&residual / &scale)?)?;
-            let quantized = (&quantized * &scale)?;
+            let (quantized, indices) = layer.forward(&(residual.clone() / *scale as f64)?)?;
+            let quantized = (quantized * *scale as f64)?;
             residual = (&residual - quantized.detach())?;
             quantized_out = (&quantized_out + &quantized)?;
             all_indices.push(indices);
@@ -77,7 +73,6 @@ impl Module for ResidualFSQ {
 
 pub struct GroupedResidualFSQ {
     rvqs: Vec<ResidualFSQ>,
-    dim: usize,
     groups: usize,
 }
 
@@ -97,7 +92,6 @@ impl GroupedResidualFSQ {
                 dim: dim_per_group,
                 levels: config.levels.clone(),
                 num_quantizers: config.num_quantizers,
-                groups: 1, // Each RVQ handles one group
             };
             rvqs.push(ResidualFSQ::load(
                 vb.pp(&format!("rvqs.{}", i)),
@@ -105,7 +99,7 @@ impl GroupedResidualFSQ {
             )?);
         }
 
-        Ok(Self { rvqs, dim, groups })
+        Ok(Self { rvqs, groups })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
