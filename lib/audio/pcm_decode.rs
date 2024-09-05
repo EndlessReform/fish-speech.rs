@@ -10,7 +10,9 @@ where
     samples.extend(data.chan(0).iter().map(|v| f32::from_sample(*v)))
 }
 
-pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<(Vec<f32>, u32)> {
+pub fn pcm_decode<P: AsRef<std::path::Path>>(
+    path: P,
+) -> anyhow::Result<(Vec<f32>, u32, usize, usize)> {
     // Open the media source.
     let src = std::fs::File::open(path)?;
 
@@ -46,6 +48,7 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<(Vec<f32
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
     let mut pcm_data = Vec::new();
+
     // The decode loop.
     while let Ok(packet) = format.next_packet() {
         // Consume any new metadata that has been read since the last packet.
@@ -70,5 +73,14 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<(Vec<f32
             AudioBufferRef::F64(data) => conv(&mut pcm_data, data),
         }
     }
-    Ok((pcm_data, sample_rate))
+    // Normalize to (-1,1)
+    let epsilon = 1e-7;
+    let max_abs = pcm_data.iter().fold(0f32, |max, &x| max.max(x.abs()));
+    if max_abs > epsilon {
+        pcm_data.iter_mut().for_each(|x| *x /= max_abs);
+    }
+    let num_frames = pcm_data.len();
+
+    // 1 channel as we're only taking the first
+    Ok((pcm_data, sample_rate, num_frames, 1))
 }

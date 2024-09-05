@@ -1,3 +1,4 @@
+pub mod functional;
 pub mod pcm_decode;
 
 use anyhow::{bail, Result};
@@ -28,13 +29,23 @@ impl Default for AudioConfig {
     }
 }
 
+/// Replicates `torchaudio.load` with the following limitations:
+/// - Only takes the first channel of audio instead of mean or returning all
+pub fn load<P: AsRef<Path>>(path: P, device: &Device) -> Result<(Tensor, u32)> {
+    // Load audio file and convert to PCM
+    let (pcm_data, sample_rate, num_frames, num_channels) = pcm_decode::pcm_decode(path)?;
+    let tensor = Tensor::from_slice(&pcm_data, (num_channels, num_frames), device)?;
+
+    Ok((tensor, sample_rate))
+}
+
 pub fn load_audio<P: AsRef<Path>>(
     path: P,
     config: &AudioConfig,
     device: &Device,
 ) -> Result<Tensor> {
     // Load audio file and convert to PCM
-    let (pcm_data, original_sample_rate) = pcm_decode::pcm_decode(path)?;
+    let (pcm_data, original_sample_rate, _, _) = pcm_decode::pcm_decode(path)?;
 
     // Handle stereo if necessary
     let mono_pcm = if pcm_data.len() % 2 == 0 {
@@ -95,7 +106,7 @@ fn handle_stereo_pcm(pcm_data: &[f32]) -> Vec<f32> {
     mono
 }
 
-fn resample(pcm_data: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+pub fn resample(pcm_data: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     // Use f64 for ratio and length calculations for better precision with large numbers
     let resample_ratio = to_rate as f64 / from_rate as f64;
     let output_len_f64 = (pcm_data.len() as f64 * resample_ratio).ceil();

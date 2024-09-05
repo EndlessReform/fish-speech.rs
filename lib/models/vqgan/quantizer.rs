@@ -1,4 +1,5 @@
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
+use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
 use candle_core::{Result, Tensor};
 use candle_nn::{
     seq, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, Sequential,
@@ -11,7 +12,7 @@ pub struct DownsampleFSQConfig {
     input_dim: usize,
     n_codebooks: usize,
     n_groups: usize,
-    levels: Vec<usize>,
+    levels: Vec<u32>,
     downsample_factor: Vec<usize>,
     downsample_dims: Option<Vec<usize>>,
 }
@@ -32,6 +33,7 @@ impl DownsampleFSQConfig {
 pub struct DownsampleFiniteScalarQuantizer {
     downsample: Sequential,
     upsample: Sequential,
+    residual_fsq: GroupedResidualFSQ,
 }
 
 impl DownsampleFiniteScalarQuantizer {
@@ -45,6 +47,16 @@ impl DownsampleFiniteScalarQuantizer {
                 .take(config.downsample_factor.len() + 1)
                 .collect()
         };
+
+        let residual_fsq = GroupedResidualFSQ::load(
+            vb.pp("residual_fsq"),
+            &GroupedResidualFSQConfig {
+                dim: *all_dims.last().unwrap(),
+                levels: config.levels,
+                num_quantizers: config.n_codebooks,
+                groups: config.n_groups,
+            },
+        )?;
 
         let mut downsample = seq();
         let vb_ds = vb.pp("downsample");
@@ -97,14 +109,29 @@ impl DownsampleFiniteScalarQuantizer {
         }
 
         Ok(Self {
+            residual_fsq,
             downsample,
             upsample,
         })
     }
 
     pub fn downsample(self, z: &Tensor) -> Result<Tensor> {
-        // TODO: Residual_FSQ
-        self.downsample.forward(z)
+        let z = self.downsample.forward(z)?;
+
+        // Transpose z (equivalent to .mT in Python)
+        let z_t = z.transpose(1, 2)?;
+
+        // Apply residual_fsq
+        let (_, indices) = self.residual_fsq.forward(&z_t)?;
+
+        // Rearrange indices
+        // Original: indices = rearrange(indices, "g b l r -> b (g r) l")
+        // We need to do this manually in Rust
+        let (g, b, l, r) = indices.dims4()?;
+        let indices = indices.permute((1, 0, 3, 2))?; // b g r l
+        let indices = indices.reshape((b, g * r, l))?;
+
+        Ok(indices)
     }
 
     pub fn upsample(self, z: &Tensor) -> Result<Tensor> {

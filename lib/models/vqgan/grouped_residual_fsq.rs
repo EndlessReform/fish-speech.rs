@@ -74,3 +74,72 @@ impl Module for ResidualFSQ {
         Ok(self.forward(x)?.0)
     }
 }
+
+pub struct GroupedResidualFSQ {
+    rvqs: Vec<ResidualFSQ>,
+    dim: usize,
+    groups: usize,
+}
+
+impl GroupedResidualFSQ {
+    pub fn load(vb: VarBuilder, config: &GroupedResidualFSQConfig) -> Result<Self> {
+        let dim = config.dim;
+        let groups = config.groups;
+        assert!(
+            dim % groups == 0,
+            "Dimension must be divisible by the number of groups"
+        );
+        let dim_per_group = dim / groups;
+
+        let mut rvqs = Vec::with_capacity(groups);
+        for i in 0..groups {
+            let rvq_config = ResidualFSQConfig {
+                dim: dim_per_group,
+                levels: config.levels.clone(),
+                num_quantizers: config.num_quantizers,
+                groups: 1, // Each RVQ handles one group
+            };
+            rvqs.push(ResidualFSQ::load(
+                vb.pp(&format!("rvqs.{}", i)),
+                &rvq_config,
+            )?);
+        }
+
+        Ok(Self { rvqs, dim, groups })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Split the input tensor into groups
+        let chunks = x.chunk(self.groups, D::Minus1)?;
+
+        let mut quantized_chunks = Vec::with_capacity(self.groups);
+        let mut all_indices_chunks = Vec::with_capacity(self.groups);
+
+        // Apply ResidualFSQ to each group
+        for (chunk, rvq) in chunks.iter().zip(self.rvqs.iter()) {
+            let (quantized, indices) = rvq.forward(chunk)?;
+            quantized_chunks.push(quantized);
+            all_indices_chunks.push(indices);
+        }
+
+        // Combine the results
+        let quantized = Tensor::cat(&quantized_chunks, D::Minus1)?;
+        let all_indices = Tensor::stack(&all_indices_chunks, D::Minus1)?;
+
+        Ok((quantized, all_indices))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupedResidualFSQConfig {
+    pub dim: usize,
+    pub levels: Vec<u32>,
+    pub num_quantizers: usize,
+    pub groups: usize,
+}
+
+impl Module for GroupedResidualFSQ {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        Ok(self.forward(x)?.0)
+    }
+}
