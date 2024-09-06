@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_lib::audio as torchaudio;
@@ -31,10 +31,17 @@ fn main() -> Result<()> {
     const SAMPLE_RATE: u32 = 44100;
     // Add spurious batch dimension for consistency
     audio = torchaudio::functional::resample(&audio, sr, SAMPLE_RATE)?.unsqueeze(0)?;
+    println!("Audio shape: {:?}", audio.shape());
     println!(
         "Loaded audio with {} seconds",
         audio.shape().dims3()?.2 / (SAMPLE_RATE as usize)
     );
+    println!(
+        "Audio min: {}, max: {}",
+        audio.max(D::Minus1)?,
+        audio.min(D::Minus1)?
+    );
+    audio.write_npy("./tests/resources/candle_fish_preprocessed_audio.npy")?;
     let audio_lengths = Tensor::from_vec(vec![audio.shape().dims3()?.2 as u32], 1, &device)?;
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], DType::F32, &device)?

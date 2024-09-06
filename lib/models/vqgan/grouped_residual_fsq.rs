@@ -28,7 +28,7 @@ impl ResidualFSQ {
             })
             .collect();
 
-        for ind in 0..num_quantizers {
+        for _ in 0..num_quantizers {
             layers.push(FSQ::load(
                 vb.clone(),
                 &FSQConfig {
