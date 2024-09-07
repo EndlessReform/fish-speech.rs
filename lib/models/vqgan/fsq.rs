@@ -84,6 +84,7 @@ impl FSQ {
 
     pub fn bound(&self, z: &Tensor) -> Result<Tensor> {
         let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
+        println!("Levels dtype: {:?}", levels_sub_1.dtype());
         let half_l = levels_sub_1
             .broadcast_mul(&Tensor::full(
                 0.999,
@@ -131,6 +132,7 @@ impl FSQ {
         ))?;
 
         let codes = self.quantize(&z)?;
+        println!("Codes dtype: {:?}", codes.dtype());
         let indices = codes
             .mul(&self.basis.unsqueeze(0)?.unsqueeze(0)?)?
             .sum(2)?

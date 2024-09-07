@@ -3,6 +3,8 @@ mod fsq;
 mod grouped_residual_fsq;
 pub mod quantizer;
 
+use crate::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
+use anyhow::Result as AnyhowResult;
 use candle_core::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
@@ -32,12 +34,13 @@ impl Config {
 }
 
 pub struct FireflyArchitecture {
+    spec_transform: LogMelSpectrogram,
     backbone: ConvNeXtEncoder,
     quantizer: DownsampleFiniteScalarQuantizer,
 }
 
 impl FireflyArchitecture {
-    pub fn load(vb: VarBuilder) -> Result<Self> {
+    pub fn load(vb: VarBuilder) -> AnyhowResult<Self> {
         let config = Config::fish_1_2();
         // TODO: This will have to be fixed w/ rest of config
         let backbone = ConvNeXtEncoder::load(
@@ -55,16 +58,19 @@ impl FireflyArchitecture {
             // TODO: Parameterize this
             DownsampleFSQConfig::firefly_1_2(),
         )?;
+        let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
         Ok(Self {
             backbone,
             quantizer,
+            spec_transform,
         })
     }
 
-    pub fn encode(self, audios: &Tensor) -> Result<Tensor> {
-        // TODO: Preprocessing
-        let x = self.backbone.forward(audios)?;
-        self.quantizer.downsample(&x)
-        // TODO: Postprocessing
+    pub fn encode(self, audio: &Tensor) -> Result<Tensor> {
+        let mel = self.spec_transform.forward(&audio)?;
+        println!("Mels shape after spec transform: {:?}", mel.shape());
+        let encoded_features = self.backbone.forward(&mel)?;
+        println!("Encoded features shape: {:?}", encoded_features.shape());
+        self.quantizer.encode(&encoded_features)
     }
 }

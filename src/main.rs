@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, D};
+use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_lib::audio as torchaudio;
@@ -11,6 +11,10 @@ struct Args {
     /// Input source audio file path
     #[arg(short = 'i', long = "input", value_hint = ValueHint::FilePath)]
     src_audio: String,
+
+    /// Output audio file path
+    #[arg(short = 'o', long = "output-path", value_hint = ValueHint::FilePath)]
+    dest_audio: String,
 
     /// Path to the model checkpoint
     #[arg(long, value_name = "CHECKPOINT_PATH", value_hint = ValueHint::FilePath)]
@@ -34,22 +38,17 @@ fn main() -> Result<()> {
     println!("Audio shape: {:?}", audio.shape());
     println!(
         "Loaded audio with {} seconds",
-        audio.shape().dims3()?.2 / (SAMPLE_RATE as usize)
+        audio.shape().dims3()?.2 as f64 / (SAMPLE_RATE as f64)
     );
-    println!(
-        "Audio min: {}, max: {}",
-        audio.max(D::Minus1)?,
-        audio.min(D::Minus1)?
-    );
-    audio.write_npy("./tests/resources/candle_fish_preprocessed_audio.npy")?;
-    let audio_lengths = Tensor::from_vec(vec![audio.shape().dims3()?.2 as u32], 1, &device)?;
+    // audio.write_npy("./tests/resources/candle_fish_preprocessed_audio.npy")?;
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], DType::F32, &device)?
     };
 
     let encoder = FireflyArchitecture::load(vb)?;
-    // let result = encoder.encode(&audio)?;
-    // println!("{:?}", result);
+    let result = encoder.encode(&audio)?;
+    println!("Generated indices of shape {:?}", result.shape());
+    audio.write_npy(args.dest_audio)?;
 
     Ok(())
 }

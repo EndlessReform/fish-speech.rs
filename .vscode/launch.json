@@ -20,7 +20,9 @@
         "--checkpoint-path",
         "./notebooks/firefly-gan-vq-fsq-4x1024-42hz-generator.safetensors",
         "--input",
-        "./tests/resources/ja-1.wav"
+        "./tests/resources/ja-1.wav",
+        "-o",
+        "./foo.npy"
       ],
       "cwd": "${workspaceFolder}"
     }

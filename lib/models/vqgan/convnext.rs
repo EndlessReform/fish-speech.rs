@@ -254,6 +254,7 @@ impl Module for ConvNeXtEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut x = xs.to_owned();
         for (downsampler, block) in self.downsample_layers.iter().zip(self.stages.iter()) {
+            println!("Starting ConvNext layer");
             x = downsampler.forward(&x)?;
             x = block.forward(&x)?;
         }
