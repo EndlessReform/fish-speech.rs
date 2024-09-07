@@ -16,6 +16,7 @@ pub struct FSQ {
     project_out: Linear,
     codebook_dim: usize,
     effective_codebook_dim: usize,
+    n_codebooks: usize,
 }
 
 // This is not implemented as a unary op in Candle, for some reason
@@ -54,11 +55,14 @@ impl FSQ {
         let codebook_dim = levels.len();
         let effective_codebook_dim = codebook_dim * n_codebooks;
 
-        let levels = Tensor::from_slice(levels.as_slice(), levels.len(), device)?;
+        // Convert u32 to f32 here
+        let levels_f32: Vec<f32> = levels.iter().map(|&x| x as f32).collect();
+        let levels = Tensor::from_slice(&levels_f32, levels.len(), device)?;
+
         let mut basis = Vec::with_capacity(codebook_dim);
-        basis.push(1);
+        basis.push(1.0);
         for i in 1..codebook_dim {
-            basis.push(basis[i - 1] * config.levels[i - 1]);
+            basis.push(basis[i - 1] * levels_f32[i - 1]);
         }
         let basis = Tensor::new(basis.as_slice(), device)?;
 
@@ -79,69 +83,98 @@ impl FSQ {
             project_out,
             codebook_dim,
             effective_codebook_dim,
+            n_codebooks: config.n_codebooks,
         })
     }
 
     pub fn bound(&self, z: &Tensor) -> Result<Tensor> {
         let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
-        println!("Levels dtype: {:?}", levels_sub_1.dtype());
         let half_l = levels_sub_1
             .broadcast_mul(&Tensor::full(
-                0.999,
+                0.999 as f32,
                 self.levels.shape(),
                 self.levels.device(),
             )?)?
             .div(&Tensor::full(
-                2.0,
+                2.0 as f32,
                 self.levels.shape(),
                 self.levels.device(),
             )?)?;
 
-        let two = Tensor::full(2.0, self.levels.shape(), self.levels.device())?;
+        let two = Tensor::full(2.0 as f32, self.levels.shape(), self.levels.device())?;
         let remainder = remainder(&self.levels, &two)?;
 
         let offset = remainder
             .eq(&Tensor::zeros_like(&self.levels)?)?
             .to_dtype(self.levels.dtype())?
             .mul(&Tensor::full(
-                0.5,
+                0.5 as f32,
                 self.levels.shape(),
                 self.levels.device(),
             )?)?;
 
         let shift = tan(&offset.div(&half_l)?)?;
-        z.add(&shift)?.tanh()?.mul(&half_l)?.sub(&offset)
+        z.broadcast_add(&shift)?
+            .tanh()?
+            .broadcast_mul(&half_l)?
+            .broadcast_sub(&offset)
     }
 
     pub fn quantize(&self, z: &Tensor) -> Result<Tensor> {
         let quantized = self.bound(z)?.round()?;
-        let half_width = self.levels.div(&Tensor::full(
-            2.0,
+        let half_width = self.levels.broadcast_div(&Tensor::full(
+            2.0 as f32,
             self.levels.shape(),
             self.levels.device(),
         )?)?;
-        quantized.div(&half_width)
+        quantized.broadcast_div(&half_width)
     }
 
     pub fn forward(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
         let z = self.project_in.forward(z)?;
-        let z = z.reshape((
-            (),
-            self.effective_codebook_dim / self.codebook_dim,
-            self.codebook_dim,
-        ))?;
+        let (batch_size, seq_len, _) = z.dims3()?;
+
+        let z = z.reshape((batch_size, seq_len, self.n_codebooks, self.codebook_dim))?;
 
         let codes = self.quantize(&z)?;
-        println!("Codes dtype: {:?}", codes.dtype());
-        let indices = codes
-            .mul(&self.basis.unsqueeze(0)?.unsqueeze(0)?)?
-            .sum(2)?
-            .to_dtype(DType::I64)?;
+        let indices = self.codes_to_indices(&codes)?;
+        // TODO: revisit this if keep_num_codebooks_dim changes or codebooks > 1
+        let indices = indices.squeeze(2)?;
 
-        let out = codes.reshape(((), self.effective_codebook_dim))?;
-        let out = self.project_out.forward(&out)?;
+        let (batch_size, seq_len, _, _) = codes.dims4()?;
 
+        let codes_reshaped =
+            codes.reshape((batch_size, seq_len, self.n_codebooks * self.codebook_dim))?;
+
+        let out = self.project_out.forward(&codes_reshaped)?;
         Ok((out, indices))
+    }
+
+    fn _scale_and_shift(&self, zhat_normalized: &Tensor) -> Result<Tensor> {
+        let half_width = self.levels.div(&Tensor::full(
+            2.0 as f32,
+            self.levels.shape(),
+            self.levels.device(),
+        )?)?;
+        zhat_normalized
+            .broadcast_mul(&half_width)?
+            .broadcast_add(&half_width)
+    }
+
+    fn _scale_and_shift_inverse(&self, zhat: &Tensor) -> Result<Tensor> {
+        let half_width = self.levels.div(&Tensor::full(
+            2.0 as f32,
+            self.levels.shape(),
+            self.levels.device(),
+        )?)?;
+        zhat.broadcast_sub(&half_width)?.div(&half_width)
+    }
+
+    pub fn codes_to_indices(&self, zhat: &Tensor) -> Result<Tensor> {
+        let zhat = self._scale_and_shift(&zhat)?;
+        zhat.broadcast_mul(&self.basis)?
+            .sum(D::Minus1)?
+            .to_dtype(DType::U32)
     }
 
     pub fn indices_to_codes(&self, indices: &Tensor) -> Result<Tensor> {
@@ -167,21 +200,15 @@ impl FSQ {
         let out = self.project_out.forward(&codes)?;
         Ok(out)
     }
-    fn _scale_and_shift_inverse(&self, zhat: &Tensor) -> Result<Tensor> {
-        let half_width = self.levels.div(&Tensor::full(
-            2.0,
-            self.levels.shape(),
-            self.levels.device(),
-        )?)?;
-        zhat.sub(&half_width)?.div(&half_width)
-    }
 
+    // Modify codebook_size to work with f32
     pub fn codebook_size(&self) -> usize {
         self.levels
-            .to_vec1::<u32>()
+            .to_vec1::<f32>()
             .unwrap()
             .iter()
-            .product::<u32>() as usize
+            .map(|&x| x.round() as usize)
+            .product()
     }
 
     pub fn implicit_codebook(&self) -> Result<Tensor> {

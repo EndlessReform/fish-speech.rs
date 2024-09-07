@@ -2,3 +2,4 @@
 .venv
 *.safetensors
 checkpoints
+*.npy

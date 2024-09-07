@@ -46,9 +46,9 @@ fn main() -> Result<()> {
     };
 
     let encoder = FireflyArchitecture::load(vb)?;
-    let result = encoder.encode(&audio)?;
+    let result = encoder.encode(&audio)?.squeeze(0)?;
     println!("Generated indices of shape {:?}", result.shape());
-    audio.write_npy(args.dest_audio)?;
+    result.write_npy(args.dest_audio)?;
 
     Ok(())
 }

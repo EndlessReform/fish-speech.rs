@@ -54,8 +54,8 @@ impl ResidualFSQ {
         for (layer, scale) in self.layers.iter().zip(self.scales.iter()) {
             let (quantized, indices) = layer.forward(&(residual.clone() / *scale as f64)?)?;
             let quantized = (quantized * *scale as f64)?;
-            residual = (&residual - quantized.detach())?;
-            quantized_out = (&quantized_out + &quantized)?;
+            residual = residual.broadcast_sub(&quantized)?;
+            quantized_out = quantized_out.broadcast_add(&quantized)?;
             all_indices.push(indices);
         }
 
@@ -118,7 +118,7 @@ impl GroupedResidualFSQ {
 
         // Combine the results
         let quantized = Tensor::cat(&quantized_chunks, D::Minus1)?;
-        let all_indices = Tensor::stack(&all_indices_chunks, D::Minus1)?;
+        let all_indices = Tensor::stack(&all_indices_chunks, 0)?;
 
         Ok((quantized, all_indices))
     }
