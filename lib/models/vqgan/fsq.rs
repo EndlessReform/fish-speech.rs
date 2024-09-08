@@ -12,36 +12,29 @@ pub struct FSQConfig {
 pub struct FSQ {
     levels: Tensor,
     basis: Tensor,
-    project_in: Linear,
-    project_out: Linear,
     codebook_dim: usize,
     effective_codebook_dim: usize,
     n_codebooks: usize,
 }
 
-// This is not implemented as a unary op in Candle, for some reason
-fn tan(x: &Tensor) -> Result<Tensor> {
-    let sin_x = x.sin()?;
-    let cos_x = x.cos()?;
-    sin_x.div(&cos_x)
-}
-
 // This is also not implemented as a unary op
 fn atanh(x: &Tensor) -> Result<Tensor> {
     // atanh(x) = 0.5 * ln((1 + x) / (1 - x))
-    let one = Tensor::ones_like(x)?;
-    let numerator = one.add(x)?;
-    let denominator = one.sub(x)?;
-    numerator
-        .div(&denominator)?
-        .log()?
-        .mul(&Tensor::full(0.5, x.shape(), x.device())?)
+    let numerator = (1.0 as f64 + x)?;
+    let denominator = (1.0 as f64 - x)?;
+    numerator.div(&denominator)?.log()? * 0.5 as f64
 }
 
 // This is also not implemented as a binary op. Don't ask me why
 fn remainder(x: &Tensor, y: &Tensor) -> Result<Tensor> {
     let quotient = x.div(y)?.floor()?;
     x.sub(&quotient.mul(y)?)
+}
+
+// This is also not implemented as a binary op. Don't ask me why
+fn remainder_float(x: &Tensor, y: f64) -> Result<Tensor> {
+    let quotient = (x.clone() / y)?.floor()?;
+    x.sub(&(quotient.clone() * y)?)
 }
 
 impl FSQ {
@@ -66,21 +59,9 @@ impl FSQ {
         }
         let basis = Tensor::new(basis.as_slice(), device)?;
 
-        let project_in = Linear::new(
-            vb.pp("project_in")
-                .get((effective_codebook_dim, *input_dim), "weight")?,
-            vb.pp("project_in").get(effective_codebook_dim, "bias").ok(),
-        );
-        let project_out = Linear::new(
-            vb.pp("project_out")
-                .get((*input_dim, effective_codebook_dim), "weight")?,
-            vb.pp("project_out").get(*input_dim, "bias").ok(),
-        );
         Ok(Self {
             levels,
             basis,
-            project_in,
-            project_out,
             codebook_dim,
             effective_codebook_dim,
             n_codebooks: config.n_codebooks,
@@ -89,31 +70,16 @@ impl FSQ {
 
     pub fn bound(&self, z: &Tensor) -> Result<Tensor> {
         let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
-        let half_l = levels_sub_1
-            .broadcast_mul(&Tensor::full(
-                0.999 as f32,
-                self.levels.shape(),
-                self.levels.device(),
-            )?)?
-            .div(&Tensor::full(
-                2.0 as f32,
-                self.levels.shape(),
-                self.levels.device(),
-            )?)?;
+        let half_l = ((levels_sub_1 * 1.001 as f64)? / 2.0 as f64)?;
 
-        let two = Tensor::full(2.0 as f32, self.levels.shape(), self.levels.device())?;
-        let remainder = remainder(&self.levels, &two)?;
+        let remainder = remainder_float(&self.levels, 2.0)?;
 
-        let offset = remainder
+        let offset = (remainder
             .eq(&Tensor::zeros_like(&self.levels)?)?
             .to_dtype(self.levels.dtype())?
-            .mul(&Tensor::full(
-                0.5 as f32,
-                self.levels.shape(),
-                self.levels.device(),
-            )?)?;
+            * 0.5 as f64)?;
 
-        let shift = tan(&offset.div(&half_l)?)?;
+        let shift = atanh(&offset.div(&half_l)?)?;
         z.broadcast_add(&shift)?
             .tanh()?
             .broadcast_mul(&half_l)?
@@ -122,16 +88,12 @@ impl FSQ {
 
     pub fn quantize(&self, z: &Tensor) -> Result<Tensor> {
         let quantized = self.bound(z)?.round()?;
-        let half_width = self.levels.broadcast_div(&Tensor::full(
-            2.0 as f32,
-            self.levels.shape(),
-            self.levels.device(),
-        )?)?;
+
+        let half_width = (self.levels.clone() / 2.0 as f64)?.floor()?;
         quantized.broadcast_div(&half_width)
     }
 
     pub fn forward(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
-        let z = self.project_in.forward(z)?;
         let (batch_size, seq_len, _) = z.dims3()?;
 
         let z = z.reshape((batch_size, seq_len, self.n_codebooks, self.codebook_dim))?;
@@ -146,35 +108,27 @@ impl FSQ {
         let codes_reshaped =
             codes.reshape((batch_size, seq_len, self.n_codebooks * self.codebook_dim))?;
 
-        let out = self.project_out.forward(&codes_reshaped)?;
-        Ok((out, indices))
+        Ok((codes_reshaped, indices))
     }
 
     fn _scale_and_shift(&self, zhat_normalized: &Tensor) -> Result<Tensor> {
-        let half_width = self.levels.div(&Tensor::full(
-            2.0 as f32,
-            self.levels.shape(),
-            self.levels.device(),
-        )?)?;
+        let half_width = (self.levels.clone() / 2.0 as f64)?.floor()?;
         zhat_normalized
             .broadcast_mul(&half_width)?
             .broadcast_add(&half_width)
     }
 
     fn _scale_and_shift_inverse(&self, zhat: &Tensor) -> Result<Tensor> {
-        let half_width = self.levels.div(&Tensor::full(
-            2.0 as f32,
-            self.levels.shape(),
-            self.levels.device(),
-        )?)?;
+        let half_width = (self.levels.clone() / 2.0 as f64)?.floor()?;
         zhat.broadcast_sub(&half_width)?.div(&half_width)
     }
 
     pub fn codes_to_indices(&self, zhat: &Tensor) -> Result<Tensor> {
         let zhat = self._scale_and_shift(&zhat)?;
+
         zhat.broadcast_mul(&self.basis)?
             .sum(D::Minus1)?
-            .to_dtype(DType::U32)
+            .to_dtype(DType::I64)
     }
 
     pub fn indices_to_codes(&self, indices: &Tensor) -> Result<Tensor> {
@@ -193,12 +147,6 @@ impl FSQ {
             &self.levels.unsqueeze(0)?.unsqueeze(0)?,
         )?;
         Ok(codes_non_centered)
-    }
-
-    pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
-        let codes = self.indices_to_codes(indices)?;
-        let out = self.project_out.forward(&codes)?;
-        Ok(out)
     }
 
     // Modify codebook_size to work with f32

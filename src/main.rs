@@ -46,7 +46,8 @@ fn main() -> Result<()> {
     };
 
     let encoder = FireflyArchitecture::load(vb)?;
-    let result = encoder.encode(&audio)?.squeeze(0)?;
+    // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere
+    let result = encoder.encode(&audio, true)?.squeeze(0)?;
     println!("Generated indices of shape {:?}", result.shape());
     result.write_npy(args.dest_audio)?;
 

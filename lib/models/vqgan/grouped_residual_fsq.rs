@@ -1,6 +1,6 @@
 use super::fsq::{FSQConfig, FSQ};
 use candle_core::{Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{Linear, VarBuilder};
 
 #[derive(Debug, Clone)]
 pub struct ResidualFSQConfig {
@@ -13,12 +13,17 @@ pub struct ResidualFSQ {
     layers: Vec<FSQ>,
     scales: Vec<f32>,
     num_quantizers: usize,
+    // Which one it is
+    index: usize,
+    project_in: Linear,
+    project_out: Linear,
 }
 
 impl ResidualFSQ {
-    pub fn load(vb: VarBuilder, config: &ResidualFSQConfig) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &ResidualFSQConfig, index: usize) -> Result<Self> {
         let num_quantizers = config.num_quantizers;
         let mut layers = Vec::with_capacity(num_quantizers);
+        let codebook_dim = config.levels.len();
 
         // Calculate scales
         let scales: Vec<f32> = (0..num_quantizers)
@@ -38,17 +43,32 @@ impl ResidualFSQ {
                 },
             )?);
         }
+        let project_in = Linear::new(
+            vb.pp("project_in")
+                .get((codebook_dim, config.dim), "weight")?,
+            vb.pp("project_in").get(codebook_dim, "bias").ok(),
+        );
+        let project_out = Linear::new(
+            vb.pp("project_out")
+                .get((config.dim, codebook_dim), "weight")?,
+            vb.pp("project_out").get(config.dim, "bias").ok(),
+        );
 
         Ok(ResidualFSQ {
             layers,
             scales,
             num_quantizers,
+            index,
+            project_in,
+            project_out,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
-        let mut quantized_out = Tensor::zeros_like(x)?;
-        let mut residual = x.clone();
+        let x = self.project_in.forward(x)?;
+        let mut quantized_out = Tensor::zeros_like(&x)?;
+        // Implicit first-step
+        let mut residual = self.layers[0].bound(&x)?;
         let mut all_indices = Vec::with_capacity(self.num_quantizers);
 
         for (layer, scale) in self.layers.iter().zip(self.scales.iter()) {
@@ -58,6 +78,7 @@ impl ResidualFSQ {
             quantized_out = quantized_out.broadcast_add(&quantized)?;
             all_indices.push(indices);
         }
+        let quantized_out = self.project_out.forward(&quantized_out)?;
 
         let all_indices = Tensor::stack(&all_indices, D::Minus1)?;
         Ok((quantized_out, all_indices))
@@ -96,6 +117,7 @@ impl GroupedResidualFSQ {
             rvqs.push(ResidualFSQ::load(
                 vb.pp(&format!("rvqs.{}", i)),
                 &rvq_config,
+                i,
             )?);
         }
 

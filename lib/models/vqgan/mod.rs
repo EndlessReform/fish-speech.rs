@@ -66,11 +66,16 @@ impl FireflyArchitecture {
         })
     }
 
-    pub fn encode(self, audio: &Tensor) -> Result<Tensor> {
+    pub fn encode(self, audio: &Tensor, should_override: bool) -> Result<Tensor> {
         let mel = self.spec_transform.forward(&audio)?;
-        println!("Mels shape after spec transform: {:?}", mel.shape());
-        let encoded_features = self.backbone.forward(&mel)?;
-        println!("Encoded features shape: {:?}", encoded_features.shape());
+        mel.write_npy("spec_transform.npy")?;
+        let encoded_features = if should_override {
+            let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?;
+            self.backbone.forward(&override_mel)?
+        } else {
+            self.backbone.forward(&mel)?
+        };
+        encoded_features.write_npy("backbone.npy")?;
         self.quantizer.encode(&encoded_features)
     }
 }
