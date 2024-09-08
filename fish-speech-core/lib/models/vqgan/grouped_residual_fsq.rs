@@ -13,14 +13,12 @@ pub struct ResidualFSQ {
     layers: Vec<FSQ>,
     scales: Vec<f32>,
     num_quantizers: usize,
-    // Which one it is
-    index: usize,
     project_in: Linear,
     project_out: Linear,
 }
 
 impl ResidualFSQ {
-    pub fn load(vb: VarBuilder, config: &ResidualFSQConfig, index: usize) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &ResidualFSQConfig) -> Result<Self> {
         let num_quantizers = config.num_quantizers;
         let mut layers = Vec::with_capacity(num_quantizers);
         let codebook_dim = config.levels.len();
@@ -58,7 +56,6 @@ impl ResidualFSQ {
             layers,
             scales,
             num_quantizers,
-            index,
             project_in,
             project_out,
         })
@@ -117,7 +114,6 @@ impl GroupedResidualFSQ {
             rvqs.push(ResidualFSQ::load(
                 vb.pp(&format!("rvqs.{}", i)),
                 &rvq_config,
-                i,
             )?);
         }
 

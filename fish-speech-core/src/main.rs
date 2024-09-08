@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{DType, Device};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_lib::audio as torchaudio;
@@ -25,6 +25,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     println!("Processing in-place reconstruction of {}", args.src_audio);
+    println!(
+        "Warning: Loading precomputed audio for debugging. Please don't use this for production"
+    );
 
     let device = Device::Cpu;
     let (mut audio, sr) = torchaudio::load(args.src_audio, &device)?;
@@ -45,9 +48,11 @@ fn main() -> Result<()> {
         VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], DType::F32, &device)?
     };
 
+    // NOTE: Not using audio for now
+    let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?;
     let encoder = FireflyArchitecture::load(vb)?;
     // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere
-    let result = encoder.encode(&audio, true)?.squeeze(0)?;
+    let result = encoder.encode(&override_mel)?.squeeze(0)?;
     println!("Generated indices of shape {:?}", result.shape());
     result.write_npy(args.dest_audio)?;
 

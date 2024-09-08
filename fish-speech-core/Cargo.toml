@@ -1,0 +1,24 @@
+[package]
+name = "fish-speech-candle"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fish_speech_lib"
+path = "lib/lib.rs"
+
+
+[dependencies]
+anyhow = "1.0.86"
+byteorder = "1.5.0"
+candle-core = "0.6.0"
+candle-nn = "0.6.0"
+candle-transformers = "0.6.0"
+clap = { version = "4.5.16", features = ["derive"] }
+hf-hub = "0.3.2"
+rand = "0.8.5"
+serde = "1.0.208"
+serde_json = "1.0.127"
+symphonia = "0.5.4"
+thiserror = "1.0.63"
+tokenizers = "0.20.0"

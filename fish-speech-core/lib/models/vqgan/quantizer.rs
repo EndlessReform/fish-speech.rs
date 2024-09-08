@@ -123,7 +123,7 @@ impl DownsampleFiniteScalarQuantizer {
         let z_t = z.transpose(1, 2)?;
 
         // Apply residual_fsq
-        let (codes, indices) = self.residual_fsq.forward(&z_t)?;
+        let (_codes, indices) = self.residual_fsq.forward(&z_t)?;
 
         // Rearrange indices
         // Original: indices = rearrange(indices, "g b l r -> b (g r) l")

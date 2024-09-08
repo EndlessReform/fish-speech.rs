@@ -3,7 +3,6 @@ mod fsq;
 mod grouped_residual_fsq;
 pub mod quantizer;
 
-use crate::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
 use anyhow::Result as AnyhowResult;
 use candle_core::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};
@@ -17,7 +16,6 @@ pub struct Config {
     depths: [usize; 4],
     dims: [usize; 4],
     kernel_size: usize,
-    drop_path_rate: f64,
 }
 
 impl Config {
@@ -27,14 +25,13 @@ impl Config {
             input_channels: 160,
             depths: [3, 3, 9, 3],
             dims: [128, 256, 384, 512],
-            drop_path_rate: 0.2,
+            // drop_path_rate: 0.2,
             kernel_size: 7,
         }
     }
 }
 
 pub struct FireflyArchitecture {
-    spec_transform: LogMelSpectrogram,
     backbone: ConvNeXtEncoder,
     quantizer: DownsampleFiniteScalarQuantizer,
 }
@@ -58,24 +55,17 @@ impl FireflyArchitecture {
             // TODO: Parameterize this
             DownsampleFSQConfig::firefly_1_2(),
         )?;
-        let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
         Ok(Self {
             backbone,
             quantizer,
-            spec_transform,
         })
     }
 
-    pub fn encode(self, audio: &Tensor, should_override: bool) -> Result<Tensor> {
-        let mel = self.spec_transform.forward(&audio)?;
-        mel.write_npy("spec_transform.npy")?;
-        let encoded_features = if should_override {
-            let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?;
-            self.backbone.forward(&override_mel)?
-        } else {
-            self.backbone.forward(&mel)?
-        };
-        encoded_features.write_npy("backbone.npy")?;
+    /// Unlike upstream implementation, requires MEL binning beforehand
+    pub fn encode(self, mel: &Tensor) -> Result<Tensor> {
+        // mel.write_npy("spec_transform.npy")?;
+        let encoded_features = self.backbone.forward(&mel)?;
+        // encoded_features.write_npy("backbone.npy")?;
         self.quantizer.encode(&encoded_features)
     }
 }

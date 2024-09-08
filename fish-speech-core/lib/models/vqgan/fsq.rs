@@ -1,5 +1,5 @@
-use candle_core::{DType, Module, Result, Tensor, D};
-use candle_nn::{Linear, VarBuilder};
+use candle_core::{DType, Result, Tensor, D};
+use candle_nn::VarBuilder;
 
 #[derive(Debug, Clone)]
 pub struct FSQConfig {
@@ -43,7 +43,7 @@ impl FSQ {
         let FSQConfig {
             levels,
             n_codebooks,
-            input_dim,
+            input_dim: _input_dim,
         } = config;
         let codebook_dim = levels.len();
         let effective_codebook_dim = codebook_dim * n_codebooks;

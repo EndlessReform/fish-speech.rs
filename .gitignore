@@ -3,3 +3,5 @@
 *.safetensors
 checkpoints
 *.npy
+# For debugging purposes; remove before production!
+!spec_transform_fish_c_order.npy
