@@ -115,7 +115,7 @@ impl DownsampleFiniteScalarQuantizer {
         })
     }
 
-    pub fn encode(self, z: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, z: &Tensor) -> Result<Tensor> {
         let z = self.downsample.forward(z)?;
         println!("Index shape before encoding: {:?}", z.shape());
 

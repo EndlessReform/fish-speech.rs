@@ -8,11 +8,11 @@
       "cargo": {
         "args": [
           "build",
-          "--bin=fish-speech-candle",
-          "--package=fish-speech-candle"
+          "--bin=fish_speech_core",
+          "--package=fish_speech_core"
         ],
         "filter": {
-          "name": "fish-speech-candle",
+          "name": "fish_speech_core",
           "kind": "bin"
         }
       },

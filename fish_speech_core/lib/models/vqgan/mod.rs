@@ -62,7 +62,7 @@ impl FireflyArchitecture {
     }
 
     /// Unlike upstream implementation, requires MEL binning beforehand
-    pub fn encode(self, mel: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, mel: &Tensor) -> Result<Tensor> {
         // mel.write_npy("spec_transform.npy")?;
         let encoded_features = self.backbone.forward(&mel)?;
         // encoded_features.write_npy("backbone.npy")?;
