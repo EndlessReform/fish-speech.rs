@@ -68,28 +68,10 @@ def main():
 
     # Initialize and run FishSpeechModel
     model = FishSpeechModel()
-    indices = model.forward(log_mel_spec[np.newaxis, :, :].astype(np.int64))
+    indices = model.forward(log_mel_spec[np.newaxis, :, :].astype(np.int32))
 
-    # Ensure indices is a numpy array
-    if not isinstance(indices, np.ndarray):
-        indices = np.array(indices)
-
-    # Save output as NPY file with correct parameters for cross-platform compatibility
-    structured_dtype = np.dtype([("", np.int64, indices.shape[1])])
-    structured_array = np.array([tuple(row) for row in indices], dtype=structured_dtype)
-
-    np.save("output_file.npy", structured_array, allow_pickle=False, fix_imports=False)
+    np.save(output_path, np.array(indices).astype(np.int32))
     print(f"Saved output to {output_path}")
-    print(f"Numpy version: {np.__version__}")
-    import sys
-
-    print(f"System byteorder: {sys.byteorder}")
-
-    # Verify the save
-    loaded = np.load(output_path, allow_pickle=False)
-    print(f"Verified shape after save: {loaded.shape}")
-    print(f"Verified ndim after save: {loaded.ndim}")
-    print(loaded)
 
 
 if __name__ == "__main__":
