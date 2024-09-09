@@ -1,2 +1,3 @@
 [workspace]
-members = ["fish-speech-core"]
+members = ["fish_speech_core", "fish_speech_python"]
+resolver = "2"

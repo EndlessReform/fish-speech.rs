@@ -1,10 +1,10 @@
 [package]
-name = "fish-speech-candle"
+name = "fish_speech_core"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "fish_speech_lib"
+name = "fish_speech_core"
 path = "lib/lib.rs"
 
 

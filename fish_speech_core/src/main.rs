@@ -2,8 +2,8 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
-use fish_speech_lib::audio as torchaudio;
-use fish_speech_lib::models::vqgan::FireflyArchitecture;
+use fish_speech_core::audio as torchaudio;
+use fish_speech_core::models::vqgan::FireflyArchitecture;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
