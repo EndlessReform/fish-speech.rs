@@ -19,7 +19,7 @@ fn main() {
     };
 
     // TODO: Tokenization and preprocessing
-    let example_input = Tensor::read_npy("array_fixed_standard.npy")
+    let example_input = Tensor::read_npy("final_prompt.npy")
         .unwrap()
         .to_dtype(DType::U32)
         .unwrap();
@@ -27,6 +27,7 @@ fn main() {
     println!("Model loaded");
     let slow_tokens = model.forward_generate(&example_input).unwrap();
     println!("Single token generated!");
-    slow_tokens.1.write_npy("first_token_out_rs.npy").unwrap();
+    slow_tokens.0.write_npy("first_token_out_rs.npy").unwrap();
+    slow_tokens.1.write_npy("first_hidden_rs.npy").unwrap();
     // TODO: Checking fast tokens
 }

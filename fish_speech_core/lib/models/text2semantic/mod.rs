@@ -1,5 +1,3 @@
-use core::f32;
-
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use candle_transformers::utils::repeat_kv;
@@ -41,7 +39,7 @@ impl Default for BaseModelArgs {
             norm_eps: 1e-6,
             max_seq_len: 4096,
             dropout: 0.0,
-            tie_word_embeddings: true,
+            tie_word_embeddings: false,
             attention_qkv_bias: false,
             codebook_size: 1024,
             num_codebooks: 4,
@@ -98,47 +96,33 @@ impl Module for FeedForward {
     }
 }
 
-/// Mostly copied from candle-transformers/phi3.rs
-#[derive(Debug, Clone)]
-pub struct RotaryEmbedding {
-    sin: Tensor,
+pub struct Cache {
+    /// TODO: Does this require Arc<Mutex>>?
+    kvs: Option<(Tensor, Tensor)>,
     cos: Tensor,
+    sin: Tensor,
 }
 
-impl RotaryEmbedding {
-    pub fn new(dtype: DType, cfg: &BaseModelArgs, dev: &Device) -> Result<Self> {
-        let dim = cfg.head_dim;
-        let max_seq_len = cfg.max_seq_len;
-        let rope_theta = 1f64 / (cfg.rope_base as f64);
-
-        let inv_freq: Vec<_> = (0..dim)
+impl Cache {
+    pub fn new(dtype: DType, config: &BaseModelArgs, device: &Device) -> Result<Self> {
+        // Precompute freqs_cis
+        let n_elem = config.dim / config.n_head;
+        let theta: Vec<_> = (0..n_elem)
             .step_by(2)
-            .map(|i| 1f32 / rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| 1f32 / config.rope_base.powf(i as f32 / n_elem as f32))
             .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
+        let theta = Tensor::new(theta.as_slice(), device)?;
+        let idx_theta = Tensor::arange(0, config.max_seq_len as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((config.max_seq_len, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let cos = idx_theta.cos()?.to_dtype(dtype)?;
+        let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            kvs: None,
+            cos,
+            sin,
         })
-    }
-
-    pub fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        Ok((q_embed, k_embed))
     }
 }
 
@@ -158,16 +142,13 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 pub struct Attention {
-    dropout: f32,
     n_head: usize,
     head_dim: usize,
     n_local_heads: usize,
     dim: usize,
     wqkv: Linear,
     wo: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
-    use_cache: bool,
-    rope_emb: RotaryEmbedding,
+    cache: Cache,
 }
 
 impl Attention {
@@ -177,10 +158,11 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let rope_emb = RotaryEmbedding::new(vb.dtype(), config, vb.device())?;
+        let cache = Cache::new(vb.dtype(), config, vb.device())?;
+        // let freqs_cis = Tensor::stack(&[&cache.cos, &cache.sin], D::Minus1)?;
+        // freqs_cis.write_npy("freqs_cis_rust.npy")?;
 
         Ok(Self {
-            dropout: config.dropout,
             n_head: config.n_head,
             head_dim: config.head_dim,
             n_local_heads: config.n_local_heads,
@@ -188,12 +170,23 @@ impl Attention {
             wqkv,
             wo,
             // TODO configure this, improve cache handling
-            use_cache: true,
-            kv_cache: None,
-            rope_emb,
+            cache,
         })
     }
 
+    fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Transpose q and k to have shape (batch_size, n_head, seq_len, head_dim)
+
+        // Narrow the cosine and sine embeddings as needed
+        let cos = &self.cache.cos;
+        let sin = &self.cache.sin;
+
+        // Apply rotary embeddings using rope
+        // TODO: The offset will kill me, but we'll worry about that later
+        let q_embed = candle_nn::rotary_emb::rope_i_slow(&q, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope_i_slow(&k, &cos, &sin)?;
+        Ok((q_embed, k_embed))
+    }
     /// Standard inefficient SDPA
     fn scaled_dot_product_attention(
         &self,
@@ -206,6 +199,7 @@ impl Attention {
         let scale_factor = 1f64 / (query.dim(D::Minus1)? as f64).sqrt();
 
         let attn_weight = query.matmul(&(key.transpose(D::Minus2, D::Minus1)? * scale_factor)?)?;
+        println!("Attention core weight shape: {:?}", attn_weight.shape());
         let attn_weight = masked_fill(
             &attn_weight,
             &attn_mask.broadcast_left((1, self.n_head))?,
@@ -217,7 +211,7 @@ impl Attention {
     }
 
     pub fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let (b_sz, q_len, _) = x.dims3()?;
+        let (bsz, seqlen, _) = x.dims3()?;
 
         let qkv = self.wqkv.forward(x)?;
         let query_pos = self.n_head * self.head_dim;
@@ -230,25 +224,27 @@ impl Attention {
         )?;
 
         let query_states = query_states
-            .reshape((b_sz, q_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .reshape((bsz, seqlen, self.n_head, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        // query_states.write_npy("q1_before_rope_rust.npy")?;
         let key_states = key_states
-            .reshape((b_sz, q_len, self.n_local_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
         let value_states = value_states
-            .reshape((b_sz, q_len, self.n_local_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // Logic copied from phi3.rs
-        let seqlen_offset = match &self.kv_cache {
+        let seqlen_offset = match &self.cache.kvs {
             None => 0,
             Some((prev_k, _)) => prev_k.dim(2)?,
         };
-        let (query_states, key_states) =
-            self.rope_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
-
-        let (key_states, value_states) = match &self.kv_cache {
+        let (query_states, key_states) = self.apply_rotary_emb_qkv(&query_states, &key_states)?;
+        // query_states.write_npy("q1_after_rope_rust.npy")?;
+        let (key_states, value_states) = match &self.cache.kvs {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
                 let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
@@ -256,7 +252,7 @@ impl Attention {
                 (key_states, value_states)
             }
         };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        self.cache.kvs = Some((key_states.clone(), value_states.clone()));
 
         // Repeat KV cache
         let key_states = repeat_kv(key_states, self.n_head / self.n_local_heads)?.contiguous()?;
@@ -269,7 +265,8 @@ impl Attention {
         let y = y
             .transpose(1, 2)?
             .contiguous()?
-            .reshape((b_sz, q_len, self.dim))?;
+            .reshape((bsz, seqlen, self.dim))?;
+
         self.wo.forward(&y)
     }
 }
@@ -300,7 +297,11 @@ impl TransformerBlock {
         let h = (x + self
             .attention
             .forward(&self.attention_norm.forward(x)?, mask)?)?;
-        self.feed_forward.forward(&self.ffn_norm.forward(&h)?) + h
+        // h.write_npy("first_h_out_rust.npy")?;
+        let out = (self.feed_forward.forward(&self.ffn_norm.forward(&h)?) + h)?;
+        // out.write_npy("block_2_out_rust.npy")?;
+        // panic!("Prematurely bailing after first attention");
+        Ok(out)
     }
 }
 
@@ -391,17 +392,35 @@ impl DualARTransformer {
 
     /// Returns (logits, hidden_states)
     pub fn forward_generate(&mut self, inp: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (__size, seq_len) = inp.dims2()?;
         let x = self.embed(inp)?;
+        x.write_npy("final_prompt_emb_rust.npy")?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
-        let mask = get_mask(inp.dim(D::Minus1)?, x.device())?;
+        let mask = get_mask(seq_len, x.device())?;
+        println!("Mask shape: {:?}", mask.shape());
+        // mask.write_npy(mask)?
 
-        let x = self.layers.iter_mut().fold(Ok(x), |maybe_x, layer| {
-            maybe_x.and_then(|x| layer.forward(&x, &mask)? + x)
-        })?;
+        let x = self
+            .layers
+            .iter_mut()
+            .enumerate()
+            .fold(Ok(x), |maybe_x, layer| {
+                maybe_x.and_then(|x| {
+                    if layer.0 > 100 {
+                        panic!("Stopping at layer 2")
+                    } else {
+                        layer.1.forward(&x, &mask)? + x
+                    }
+                })
+            })?;
+        x.write_npy("x_end_rs.npy")?;
+
+        let x = x.narrow(1, seq_len - 1, 1)?;
         let slow_out = self.norm.forward(&x)?;
         let token_logits = self.output.forward(&slow_out)?;
 
+        // Only calculate the logits of last_token
         Ok((token_logits, x))
     }
 
