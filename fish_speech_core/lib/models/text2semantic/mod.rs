@@ -1,5 +1,8 @@
+use core::f32;
+
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::{embedding, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_transformers::utils::repeat_kv;
 
 #[derive(Debug, Clone)]
 pub struct BaseModelArgs {
@@ -27,20 +30,20 @@ impl Default for BaseModelArgs {
         Self {
             model_type: "base".to_string(),
             vocab_size: 32000,
-            n_layer: 32,
+            n_layer: 24,
             n_fast_layer: 4,
-            n_head: 32,
-            dim: 4096,
+            n_head: 16,
+            dim: 1024,
             intermediate_size: Some(4096),
             n_local_heads: 2,
             head_dim: 64,
-            rope_base: 10000.0,
-            norm_eps: 1e-5,
-            max_seq_len: 2048,
+            rope_base: 1000000.0,
+            norm_eps: 1e-6,
+            max_seq_len: 4096,
             dropout: 0.0,
             tie_word_embeddings: true,
             attention_qkv_bias: false,
-            codebook_size: 160,
+            codebook_size: 1024,
             num_codebooks: 4,
         }
     }
@@ -67,8 +70,8 @@ impl FeedForward {
         let w2 = Linear::new(
             vb.get(
                 (
-                    config.intermediate_size.unwrap_or(config.dim * 4),
                     config.dim,
+                    config.intermediate_size.unwrap_or(config.dim * 4),
                 ),
                 "w2.weight",
             )?,
@@ -77,8 +80,8 @@ impl FeedForward {
         let w3 = Linear::new(
             vb.get(
                 (
-                    config.dim,
                     config.intermediate_size.unwrap_or(config.dim * 4),
+                    config.dim,
                 ),
                 "w3.weight",
             )?,
@@ -139,20 +142,19 @@ impl RotaryEmbedding {
     }
 }
 
-/// Copied from falcon.rs
-fn make_causal_mask(t: usize) -> Result<Tensor> {
-    let mask: Vec<_> = (0..t)
-        .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+/// Copied from phi3.rs
+fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+    let mask: Vec<_> = (0..size)
+        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
-    let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
-    Ok(mask)
+    Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn prepare_attn_mask(b_sz: usize, seq_len: usize) -> Result<Tensor> {
-    // let mask = Tensor::ones((b_sz, seq_len), DType::U32, &Device::Cpu)?;
-    let mask = make_causal_mask(seq_len)?;
-    let mask = mask.broadcast_as((b_sz, 1, seq_len, seq_len))?;
-    Ok(mask)
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
 }
 
 pub struct Attention {
@@ -198,18 +200,17 @@ impl Attention {
         query: &Tensor,
         key: &Tensor,
         value: &Tensor,
-        attn_mask: Option<&Tensor>,
+        attn_mask: &Tensor,
     ) -> Result<Tensor> {
         let (l, s) = (query.dim(D::Minus2)?, key.dim(D::Minus2)?);
         let scale_factor = 1f64 / (query.dim(D::Minus1)? as f64).sqrt();
-        let mut attn_bias = Tensor::zeros((1, 1, l, s), query.dtype(), query.device())?;
-
-        if let Some(mask) = attn_mask {
-            attn_bias = attn_bias.broadcast_add(mask)?;
-        }
 
         let attn_weight = query.matmul(&(key.transpose(D::Minus2, D::Minus1)? * scale_factor)?)?;
-        let attn_weight = attn_weight.broadcast_add(&attn_bias)?;
+        let attn_weight = masked_fill(
+            &attn_weight,
+            &attn_mask.broadcast_left((1, self.n_head))?,
+            f32::NEG_INFINITY,
+        )?;
         let attn_weight = softmax_last_dim(&attn_weight)?;
         // Ignoring dropout until we implement training
         attn_weight.broadcast_matmul(value)
@@ -238,10 +239,14 @@ impl Attention {
             .reshape((b_sz, q_len, self.n_local_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // TODO: Is this offset right?
+        // Logic copied from phi3.rs
+        let seqlen_offset = match &self.kv_cache {
+            None => 0,
+            Some((prev_k, _)) => prev_k.dim(2)?,
+        };
         let (query_states, key_states) =
             self.rope_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, 0)?;
+                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
@@ -253,13 +258,14 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
+        // Repeat KV cache
+        let key_states = repeat_kv(key_states, self.n_head / self.n_local_heads)?.contiguous()?;
+        let value_states =
+            repeat_kv(value_states, self.n_head / self.n_local_heads)?.contiguous()?;
+
         // TODO: Add optional flash attention
-        let y = self.scaled_dot_product_attention(
-            &query_states,
-            &key_states,
-            &value_states,
-            Some(mask),
-        )?;
+        let y =
+            self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
         let y = y
             .transpose(1, 2)?
             .contiguous()?
@@ -279,8 +285,8 @@ impl TransformerBlock {
     pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs) -> Result<Self> {
         let attention = Attention::load(&vb.pp("attention"), cfg)?;
         let feed_forward = FeedForward::load(&vb.pp("feed_forward"), cfg)?;
-        let ffn_norm = RmsNorm::new(vb.get(cfg.dim, "ffn_norm")?, cfg.norm_eps);
-        let attention_norm = RmsNorm::new(vb.get(cfg.dim, "attention_norm")?, cfg.norm_eps);
+        let ffn_norm = RmsNorm::new(vb.get(cfg.dim, "ffn_norm.weight")?, cfg.norm_eps);
+        let attention_norm = RmsNorm::new(vb.get(cfg.dim, "attention_norm.weight")?, cfg.norm_eps);
 
         Ok(Self {
             attention,
@@ -314,11 +320,11 @@ pub struct DualARTransformer {
 
 impl DualARTransformer {
     pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs, semantic_token_id: i64) -> Result<Self> {
-        let embeddings = Embedding::new(vb.get((cfg.vocab_size, cfg.dim), "embeddings")?, cfg.dim);
+        let embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("embeddings"))?;
         let codebook_embeddings = Embedding::new(
             vb.get(
                 (cfg.codebook_size * cfg.num_codebooks, cfg.dim),
-                "codebook_embeddings",
+                "codebook_embeddings.weight",
             )?,
             cfg.dim,
         );
@@ -326,18 +332,21 @@ impl DualARTransformer {
             .map(|l| TransformerBlock::load(&vb.pp(format!("layers.{}", l)), cfg))
             .collect();
         let layers = layers?;
-        let norm = RmsNorm::new(vb.get(cfg.dim, "norm")?, cfg.norm_eps);
-        let output = Linear::new(vb.get((cfg.vocab_size, cfg.dim), "output")?, None);
+        let norm = RmsNorm::new(vb.get(cfg.dim, "norm.weight")?, cfg.norm_eps);
+        let output = Linear::new(vb.get((cfg.vocab_size, cfg.dim), "output.weight")?, None);
         let fast_embeddings = Embedding::new(
-            vb.get((cfg.codebook_size, cfg.dim), "fast_embeddings")?,
+            vb.get((cfg.codebook_size, cfg.dim), "fast_embeddings.weight")?,
             cfg.dim,
         );
         let fast_layers: Result<Vec<TransformerBlock>> = (0..cfg.n_fast_layer)
             .map(|l| TransformerBlock::load(&vb.pp(format!("fast_layers.{}", l)), cfg))
             .collect();
         let fast_layers = fast_layers?;
-        let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm")?, cfg.norm_eps);
-        let fast_output = Linear::new(vb.get((cfg.dim, cfg.codebook_size), "fast_output")?, None);
+        let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
+        let fast_output = Linear::new(
+            vb.get((cfg.dim, cfg.codebook_size), "fast_output.weight")?,
+            None,
+        );
 
         Ok(Self {
             embeddings,
@@ -356,18 +365,24 @@ impl DualARTransformer {
 
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
         // Embed the initial semantic tokens
-        let semantic_tokens = x.index_select(&Tensor::from_vec(vec![1u32], 1, x.device())?, 1)?;
-        let mut vocab_embeds: Vec<Tensor> = vec![self.embeddings.forward(&semantic_tokens)?];
+        let token_codebooks = x.chunk(self.cfg.num_codebooks + 1, 0)?;
+        assert!(
+            token_codebooks.len() == self.cfg.num_codebooks + 1,
+            "Input tokens must have num_codebooks + 1 codebooks!"
+        );
+        let semantic_tokens = &token_codebooks[0];
 
-        for i in 0..self.cfg.num_codebooks {
-            let indices_at_codebook = x
-                .index_select(&Tensor::from_vec(vec![(i + 1) as u32], 1, x.device())?, 1)?
-                + (i * self.cfg.codebook_size) as f64;
-            let emb = self.codebook_embeddings.forward(&indices_at_codebook?)?;
+        let mut vocab_embeds: Vec<Tensor> = vec![self.embeddings.forward(semantic_tokens)?];
+
+        for i in 0..(self.cfg.num_codebooks) {
+            let shifted_indices = &token_codebooks[i + 1] + (i * self.cfg.codebook_size) as f64;
+            let emb = self.codebook_embeddings.forward(&shifted_indices?)?;
             // Zero out tokens where the semantic token is not the designated ID
-            let emb = semantic_tokens
+            let emb_mask = &token_codebooks[0]
                 .eq(self.semantic_token_id)?
-                .where_cond(&emb.zeros_like()?, &emb)?;
+                .unsqueeze(D::Minus1)?
+                .to_dtype(emb.dtype())?;
+            let emb = emb.broadcast_mul(emb_mask)?;
             vocab_embeds.push(emb)
         }
         let x = Tensor::stack(&vocab_embeds, 3)?;
@@ -379,7 +394,7 @@ impl DualARTransformer {
         let x = self.embed(inp)?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
-        let mask = prepare_attn_mask(1, inp.dim(D::Minus1)?)?;
+        let mask = get_mask(inp.dim(D::Minus1)?, x.device())?;
 
         let x = self.layers.iter_mut().fold(Ok(x), |maybe_x, layer| {
             maybe_x.and_then(|x| layer.forward(&x, &mask)? + x)
@@ -395,9 +410,9 @@ impl DualARTransformer {
     /// TODO: Handle `input_pos` and figure out what that's about
     pub fn forward_generate_fast(&mut self, x: &Tensor) -> Result<Tensor> {
         // let (token_logits, x) = self.parent_forward(inp, key_padding_mask)?;
+        let fast_mask = get_mask(self.cfg.num_codebooks, x.device())?;
         let x = x.reshape((1, 1, ()));
         // TODO: the shape is probably wrong, let's see how it comes out
-        let fast_mask = prepare_attn_mask(1, self.cfg.num_codebooks)?;
 
         let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
             maybe_x.and_then(|x| layer.forward(&x, &fast_mask) + x)
@@ -406,66 +421,3 @@ impl DualARTransformer {
         self.fast_output.forward(&fast_out)
     }
 }
-
-// struct KVCacheConfig {
-//     max_batch_size: usize,
-//     max_seq_len: usize,
-//     n_heads: usize,
-//     head_dim: usize,
-//     dtype: DType,
-//     device: Device,
-// }
-// struct KVCache {
-//     k_cache: Tensor,
-//     v_cache: Tensor,
-// }
-
-// impl KVCache {
-//     pub fn load(config: &KVCacheConfig) -> Result<Self> {
-//         // B * H * N_ctxt * D/H
-//         let cache_shape = (
-//             config.max_batch_size,
-//             config.n_heads,
-//             config.max_seq_len,
-//             config.head_dim,
-//         );
-//         let k_cache = Tensor::zeros(cache_shape, config.dtype.clone(), &config.device)?;
-//         let v_cache = Tensor::zeros(cache_shape, config.dtype.clone(), &config.device)?;
-//         Ok(Self { k_cache, v_cache })
-//     }
-
-//     pub fn update(&mut self, input_pos: &Tensor, k_val: &Tensor) -> Result<(Tensor, Tensor)> {
-//         assert!(&input_pos.dims1()? == &k_val.dims4()?.2);
-
-//         let k_out = self.k_cache;
-//         let v_out = self.v_cache;
-//         let k_out = // Would use slice_assign or equivalent on the tensors for this
-
-//     }
-// }
-
-// pub struct RMSNorm {
-//     eps: f64,
-//     weight: Linear,
-// }
-
-// impl RMSNorm {
-//     pub fn load(vb: &VarBuilder, dim: usize, eps: Option<f64>) -> Result<Self> {
-//         let eps = eps.unwrap_or(1e-5);
-//         let weight = Linear::new(vb.get(dim, "weight")?, None);
-//         Ok(Self { eps, weight })
-//     }
-
-//     fn _norm(&self, x: &Tensor) -> Result<Tensor> {
-//         let mu = x.powf(2.0)?.mean_keepdim(D::Minus1)?;
-//         // rsqrt isn't directly implemented in Candle
-//         x.mul(&Tensor::ones_like(&x)?.div(&(mu + self.eps)?)?)
-//     }
-// }
-
-// impl Module for RMSNorm {
-//     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-//         let output = self._norm(&xs)?;
-//         self.weight.forward(&output)
-//     }
-// }
