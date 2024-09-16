@@ -1,5 +1,7 @@
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::{
+    embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
+};
 use candle_transformers::utils::repeat_kv;
 
 #[derive(Debug, Clone)]
@@ -91,8 +93,8 @@ impl FeedForward {
 
 impl Module for FeedForward {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.w2
-            .forward(&Tensor::silu(&self.w1.forward(&xs)?)?.broadcast_mul(&self.w3.forward(&xs)?)?)
+        let x = silu(&self.w1.forward(xs)?)? * self.w3.forward(xs)?;
+        self.w2.forward(&x?)
     }
 }
 
@@ -183,8 +185,8 @@ impl Attention {
 
         // Apply rotary embeddings using rope
         // TODO: The offset will kill me, but we'll worry about that later
-        let q_embed = candle_nn::rotary_emb::rope_i_slow(&q, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope_i_slow(&k, &cos, &sin)?;
+        let q_embed = candle_nn::rotary_emb::rope_i(&q, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope_i(&k, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
     /// Standard inefficient SDPA
@@ -195,11 +197,10 @@ impl Attention {
         value: &Tensor,
         attn_mask: &Tensor,
     ) -> Result<Tensor> {
-        let (l, s) = (query.dim(D::Minus2)?, key.dim(D::Minus2)?);
-        let scale_factor = 1f64 / (query.dim(D::Minus1)? as f64).sqrt();
+        let scale_factor = (self.head_dim as f64).sqrt();
 
-        let attn_weight = query.matmul(&(key.transpose(D::Minus2, D::Minus1)? * scale_factor)?)?;
-        println!("Attention core weight shape: {:?}", attn_weight.shape());
+        let attn_weight = query.matmul(&(key.t()? / scale_factor)?)?;
+        // println!("Attention core weight shape: {:?}", attn_weight.shape());
         let attn_weight = masked_fill(
             &attn_weight,
             &attn_mask.broadcast_left((1, self.n_head))?,
@@ -207,7 +208,7 @@ impl Attention {
         )?;
         let attn_weight = softmax_last_dim(&attn_weight)?;
         // Ignoring dropout until we implement training
-        attn_weight.broadcast_matmul(value)
+        attn_weight.matmul(&value.contiguous()?)
     }
 
     pub fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
@@ -262,10 +263,8 @@ impl Attention {
         // TODO: Add optional flash attention
         let y =
             self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
-        let y = y
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((bsz, seqlen, self.dim))?;
+        let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
+        // y.write_npy("y1_after_sdpa_rust.npy")?;
 
         self.wo.forward(&y)
     }
@@ -294,14 +293,15 @@ impl TransformerBlock {
     }
 
     pub fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let h = (x + self
-            .attention
-            .forward(&self.attention_norm.forward(x)?, mask)?)?;
-        // h.write_npy("first_h_out_rust.npy")?;
-        let out = (self.feed_forward.forward(&self.ffn_norm.forward(&h)?) + h)?;
-        // out.write_npy("block_2_out_rust.npy")?;
+        let residual = x;
+        let x = self.attention_norm.forward(x)?;
+        let x = (self.attention.forward(&x, mask)? + residual)?;
+        // x.write_npy("first_h_out_rust.npy")?;
+        let residual = &x;
+        let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
+        // x?.write_npy("block_1_out_rust.npy")?;
         // panic!("Prematurely bailing after first attention");
-        Ok(out)
+        x
     }
 }
 
@@ -393,7 +393,7 @@ impl DualARTransformer {
     /// Returns (logits, hidden_states)
     pub fn forward_generate(&mut self, inp: &Tensor) -> Result<(Tensor, Tensor)> {
         let (__size, seq_len) = inp.dims2()?;
-        let x = self.embed(inp)?;
+        let mut x = self.embed(inp)?;
         x.write_npy("final_prompt_emb_rust.npy")?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
@@ -401,19 +401,9 @@ impl DualARTransformer {
         println!("Mask shape: {:?}", mask.shape());
         // mask.write_npy(mask)?
 
-        let x = self
-            .layers
-            .iter_mut()
-            .enumerate()
-            .fold(Ok(x), |maybe_x, layer| {
-                maybe_x.and_then(|x| {
-                    if layer.0 > 100 {
-                        panic!("Stopping at layer 2")
-                    } else {
-                        layer.1.forward(&x, &mask)? + x
-                    }
-                })
-            })?;
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            x = layer.forward(&x, &mask)?;
+        }
         x.write_npy("x_end_rs.npy")?;
 
         let x = x.narrow(1, seq_len - 1, 1)?;
