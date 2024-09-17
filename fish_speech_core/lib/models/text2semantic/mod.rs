@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
@@ -25,8 +25,8 @@ pub struct BaseModelArgs {
     pub num_codebooks: usize,
 }
 
-impl Default for BaseModelArgs {
-    fn default() -> Self {
+impl BaseModelArgs {
+    pub fn fish_speech_1_2() -> Self {
         Self {
             model_type: "base".to_string(),
             vocab_size: 32000,
@@ -101,31 +101,34 @@ impl Module for FeedForward {
 pub struct Cache {
     /// TODO: Does this require Arc<Mutex>>?
     kvs: Option<(Tensor, Tensor)>,
-    cos: Tensor,
-    sin: Tensor,
 }
 
 impl Cache {
-    pub fn new(dtype: DType, config: &BaseModelArgs, device: &Device) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         // Precompute freqs_cis
-        let n_elem = config.dim / config.n_head;
-        let theta: Vec<_> = (0..n_elem)
-            .step_by(2)
-            .map(|i| 1f32 / config.rope_base.powf(i as f32 / n_elem as f32))
-            .collect();
-        let theta = Tensor::new(theta.as_slice(), device)?;
-        let idx_theta = Tensor::arange(0, config.max_seq_len as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((config.max_seq_len, 1))?
-            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        let cos = idx_theta.cos()?.to_dtype(dtype)?;
-        let sin = idx_theta.sin()?.to_dtype(dtype)?;
-        Ok(Self {
-            kvs: None,
-            cos,
-            sin,
-        })
+        Ok(Self { kvs: None })
     }
+}
+
+/// Returns (cos, sin) for the full possible batch size
+fn precompute_freqs_cis(
+    config: &BaseModelArgs,
+    device: &Device,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    let n_elem = config.dim / config.n_head;
+    let theta: Vec<_> = (0..n_elem)
+        .step_by(2)
+        .map(|i| 1f32 / config.rope_base.powf(i as f32 / n_elem as f32))
+        .collect();
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, config.max_seq_len as u32, device)?
+        .to_dtype(DType::F32)?
+        .reshape((config.max_seq_len, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let cos = idx_theta.cos()?.to_dtype(dtype)?;
+    let sin = idx_theta.sin()?.to_dtype(dtype)?;
+    Ok((cos, sin))
 }
 
 /// Copied from phi3.rs
@@ -160,7 +163,7 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let cache = Cache::new(vb.dtype(), config, vb.device())?;
+        let cache = Cache::new()?;
         // let freqs_cis = Tensor::stack(&[&cache.cos, &cache.sin], D::Minus1)?;
         // freqs_cis.write_npy("freqs_cis_rust.npy")?;
 
@@ -176,19 +179,18 @@ impl Attention {
         })
     }
 
-    fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
-        // Transpose q and k to have shape (batch_size, n_head, seq_len, head_dim)
-
-        // Narrow the cosine and sine embeddings as needed
-        let cos = &self.cache.cos;
-        let sin = &self.cache.sin;
-
-        // Apply rotary embeddings using rope
-        // TODO: The offset will kill me, but we'll worry about that later
+    fn apply_rotary_emb_qkv(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
         let q_embed = candle_nn::rotary_emb::rope_i(&q, &cos, &sin)?;
         let k_embed = candle_nn::rotary_emb::rope_i(&k, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
+
     /// Standard inefficient SDPA
     fn scaled_dot_product_attention(
         &self,
@@ -200,7 +202,6 @@ impl Attention {
         let scale_factor = (self.head_dim as f64).sqrt();
 
         let attn_weight = query.matmul(&(key.t()? / scale_factor)?)?;
-        // println!("Attention core weight shape: {:?}", attn_weight.shape());
         let attn_weight = masked_fill(
             &attn_weight,
             &attn_mask.broadcast_left((1, self.n_head))?,
@@ -211,7 +212,12 @@ impl Attention {
         attn_weight.matmul(&value.contiguous()?)
     }
 
-    pub fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        mask: &Tensor,
+        freqs_cis: (&Tensor, &Tensor),
+    ) -> Result<Tensor> {
         let (bsz, seqlen, _) = x.dims3()?;
 
         let qkv = self.wqkv.forward(x)?;
@@ -243,7 +249,8 @@ impl Attention {
             None => 0,
             Some((prev_k, _)) => prev_k.dim(2)?,
         };
-        let (query_states, key_states) = self.apply_rotary_emb_qkv(&query_states, &key_states)?;
+        let (query_states, key_states) =
+            self.apply_rotary_emb_qkv(&query_states, &key_states, freqs_cis.0, freqs_cis.1)?;
         // query_states.write_npy("q1_after_rope_rust.npy")?;
         let (key_states, value_states) = match &self.cache.kvs {
             None => (key_states, value_states),
@@ -268,10 +275,14 @@ impl Attention {
 
         self.wo.forward(&y)
     }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.kvs = None;
+    }
 }
 
 pub struct TransformerBlock {
-    attention: Attention,
+    pub attention: Attention,
     feed_forward: FeedForward,
     ffn_norm: RmsNorm,
     attention_norm: RmsNorm,
@@ -292,10 +303,15 @@ impl TransformerBlock {
         })
     }
 
-    pub fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        mask: &Tensor,
+        freqs_cis: (&Tensor, &Tensor),
+    ) -> Result<Tensor> {
         let residual = x;
         let x = self.attention_norm.forward(x)?;
-        let x = (self.attention.forward(&x, mask)? + residual)?;
+        let x = (self.attention.forward(&x, mask, freqs_cis)? + residual)?;
         // x.write_npy("first_h_out_rust.npy")?;
         let residual = &x;
         let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
@@ -309,14 +325,15 @@ pub struct DualARTransformer {
     embeddings: Embedding,
     codebook_embeddings: Embedding,
     fast_layers: Vec<TransformerBlock>,
-    fast_embeddings: Embedding,
+    pub fast_embeddings: Embedding,
     layers: Vec<TransformerBlock>,
     output: Linear,
     fast_output: Linear,
     norm: RmsNorm,
     fast_norm: RmsNorm,
     semantic_token_id: i64,
-    cfg: BaseModelArgs,
+    freqs_cis: (Tensor, Tensor),
+    pub cfg: BaseModelArgs,
 }
 
 impl DualARTransformer {
@@ -348,6 +365,7 @@ impl DualARTransformer {
             vb.get((cfg.dim, cfg.codebook_size), "fast_output.weight")?,
             None,
         );
+        let freqs_cis = precompute_freqs_cis(cfg, vb.device(), vb.dtype())?;
 
         Ok(Self {
             embeddings,
@@ -361,6 +379,7 @@ impl DualARTransformer {
             norm,
             semantic_token_id,
             cfg: cfg.clone(),
+            freqs_cis,
         })
     }
 
@@ -391,18 +410,24 @@ impl DualARTransformer {
     }
 
     /// Returns (logits, hidden_states)
-    pub fn forward_generate(&mut self, inp: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
         let (__size, seq_len) = inp.dims2()?;
         let mut x = self.embed(inp)?;
         x.write_npy("final_prompt_emb_rust.npy")?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
-        let mask = get_mask(seq_len, x.device())?;
-        println!("Mask shape: {:?}", mask.shape());
-        // mask.write_npy(mask)?
+        let mask = get_mask(seq_len - input_pos, x.device())?;
 
+        let (cos_full, sin_full) = &self.freqs_cis;
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            x = layer.forward(&x, &mask)?;
+            x = layer.forward(
+                &x,
+                &mask,
+                (
+                    &cos_full.i(input_pos..input_pos + seq_len)?,
+                    &sin_full.i(input_pos..input_pos + seq_len)?,
+                ),
+            )?;
         }
         x.write_npy("x_end_rs.npy")?;
 
@@ -417,16 +442,34 @@ impl DualARTransformer {
     /// Returns codebook_logits
     ///
     /// TODO: Handle `input_pos` and figure out what that's about
-    pub fn forward_generate_fast(&mut self, x: &Tensor) -> Result<Tensor> {
-        // let (token_logits, x) = self.parent_forward(inp, key_padding_mask)?;
-        let fast_mask = get_mask(self.cfg.num_codebooks, x.device())?;
-        let x = x.reshape((1, 1, ()));
-        // TODO: the shape is probably wrong, let's see how it comes out
+    pub fn forward_generate_fast(&mut self, x: &Tensor, input_pos: usize) -> Result<Tensor> {
+        let (bsz, seq_len, _) = x.dims3()?;
+        // This is a dirty hack but it will work for now
+        let fast_mask = Tensor::from_vec(
+            vec![u8::from(true); input_pos + 1],
+            input_pos + 1,
+            x.device(),
+        )?
+        .unsqueeze(0)?
+        .repeat(bsz)?;
 
+        let x = x.reshape((1, 1, ()));
+
+        let (cos_full, sin_full) = &self.freqs_cis;
+        let freqs_cis = (
+            &cos_full.i((input_pos..(input_pos + seq_len), ..))?,
+            &sin_full.i((input_pos..input_pos + seq_len, ..))?,
+        );
         let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
-            maybe_x.and_then(|x| layer.forward(&x, &fast_mask) + x)
+            maybe_x.and_then(|x| layer.forward(&x, &fast_mask, freqs_cis))
         })?;
         let fast_out = self.fast_norm.forward(&x)?;
         self.fast_output.forward(&fast_out)
+    }
+
+    pub fn clear_fast_layer_caches(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.attention.clear_cache();
+        }
     }
 }
