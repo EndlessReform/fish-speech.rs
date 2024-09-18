@@ -207,7 +207,9 @@ impl Attention {
             &attn_mask.broadcast_left((1, self.n_head))?,
             f32::NEG_INFINITY,
         )?;
+        attn_weight.write_npy("first_attn_in_rust.npy")?;
         let attn_weight = softmax_last_dim(&attn_weight)?;
+        // Fuck it
         // Ignoring dropout until we implement training
         attn_weight.matmul(&value.contiguous()?)
     }
@@ -312,7 +314,10 @@ impl TransformerBlock {
         let residual = x;
         let x = self.attention_norm.forward(x)?;
         let x = (self.attention.forward(&x, mask, freqs_cis)? + residual)?;
-        // x.write_npy("first_h_out_rust.npy")?;
+        let (_, seq, _) = x.dims3()?;
+        if seq == 1 {
+            x.write_npy("first_h_out_rust.npy")?;
+        }
         let residual = &x;
         let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
         // x?.write_npy("block_1_out_rust.npy")?;
@@ -446,7 +451,7 @@ impl DualARTransformer {
         let (bsz, seq_len, _) = x.dims3()?;
         // This is a dirty hack but it will work for now
         let fast_mask = Tensor::from_vec(
-            vec![u8::from(true); input_pos + 1],
+            vec![u8::from(false); input_pos + 1],
             input_pos + 1,
             x.device(),
         )?
@@ -454,15 +459,21 @@ impl DualARTransformer {
         .repeat(bsz)?;
 
         let x = x.reshape((1, 1, ()));
+        let mut x = x?;
 
         let (cos_full, sin_full) = &self.freqs_cis;
         let freqs_cis = (
             &cos_full.i((input_pos..(input_pos + seq_len), ..))?,
             &sin_full.i((input_pos..input_pos + seq_len, ..))?,
         );
-        let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
-            maybe_x.and_then(|x| layer.forward(&x, &fast_mask, freqs_cis))
-        })?;
+        // let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
+        //     maybe_x.and_then(|x| layer.forward(&x, &fast_mask, freqs_cis))
+        // })?;
+        for layer in self.fast_layers.iter_mut() {
+            x = layer.forward(&x, &fast_mask, freqs_cis)?;
+            // x.write_npy("fast_codebook_01_layer_01_rust.npy")?;
+        }
+
         let fast_out = self.fast_norm.forward(&x)?;
         self.fast_output.forward(&fast_out)
     }

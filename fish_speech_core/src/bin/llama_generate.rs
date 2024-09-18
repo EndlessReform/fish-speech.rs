@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
@@ -14,11 +14,11 @@ fn decode_one_token_ar(
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     if write_debug_output {
         logits.write_npy("first_token_out_rs.npy").unwrap();
-        x.write_npy("first_hidden_rs.npy").unwrap();
+        hidden_states.write_npy("first_hidden_rs.npy").unwrap();
     }
-    let prev_codes = previous_tokens.chunk(model.cfg.codebook_size + 1, 0)?;
 
     let mut codebooks = vec![logits_processor.sample(&logits.flatten_all()?)?];
+    println!("Codes: {:?}", codebooks);
     model.clear_fast_layer_caches();
 
     let mut x = hidden_states;
@@ -30,7 +30,10 @@ fn decode_one_token_ar(
             logits.write_npy(format!("fast_codebook_{}_logits_rust.npy", codebook_idx))?;
         }
         // TODO: Handle previous_tokens!
+        let a = logits.flatten_all()?.argmax(D::Minus1)?.to_vec0::<u32>()?;
+        println!("a: {:?}", a);
         let a = logits_processor.sample(&logits.flatten_all()?)?;
+        println!("Code at layer {}: {:?}", codebook_idx + 1, a);
         // println!("Codebook shape: {:?}", prev_codes[codebook_idx + 1].shape());
         let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
         x = model.fast_embeddings.forward(&a_tensor)?.unsqueeze(0)?;
