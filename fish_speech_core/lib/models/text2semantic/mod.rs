@@ -164,8 +164,6 @@ impl Attention {
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
         let cache = Cache::new()?;
-        // let freqs_cis = Tensor::stack(&[&cache.cos, &cache.sin], D::Minus1)?;
-        // freqs_cis.write_npy("freqs_cis_rust.npy")?;
 
         Ok(Self {
             n_head: config.n_head,
@@ -200,16 +198,19 @@ impl Attention {
         attn_mask: &Tensor,
     ) -> Result<Tensor> {
         let scale_factor = (self.head_dim as f64).sqrt();
+        let seqlen = query.dim(D::Minus2)?;
 
         let attn_weight = query.matmul(&(key.t()? / scale_factor)?)?;
-        let attn_weight = masked_fill(
-            &attn_weight,
-            &attn_mask.broadcast_left((1, self.n_head))?,
-            f32::NEG_INFINITY,
-        )?;
-        attn_weight.write_npy("first_attn_in_rust.npy")?;
+        // Masking w/ KV cache is redundant
+        let attn_weight = match seqlen {
+            1 => attn_weight,
+            _ => masked_fill(
+                &attn_weight,
+                &attn_mask.broadcast_left((1, self.n_head))?,
+                f32::NEG_INFINITY,
+            )?,
+        };
         let attn_weight = softmax_last_dim(&attn_weight)?;
-        // Fuck it
         // Ignoring dropout until we implement training
         attn_weight.matmul(&value.contiguous()?)
     }
@@ -314,14 +315,8 @@ impl TransformerBlock {
         let residual = x;
         let x = self.attention_norm.forward(x)?;
         let x = (self.attention.forward(&x, mask, freqs_cis)? + residual)?;
-        let (_, seq, _) = x.dims3()?;
-        if seq == 1 {
-            x.write_npy("first_h_out_rust.npy")?;
-        }
         let residual = &x;
         let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
-        // x?.write_npy("block_1_out_rust.npy")?;
-        // panic!("Prematurely bailing after first attention");
         x
     }
 }
@@ -418,13 +413,13 @@ impl DualARTransformer {
     pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
         let (__size, seq_len) = inp.dims2()?;
         let mut x = self.embed(inp)?;
-        x.write_npy("final_prompt_emb_rust.npy")?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
-        let mask = get_mask(seq_len - input_pos, x.device())?;
+        // TODO: Handle input_pos. I'm not convinced it matters at bs=1
+        let mask = get_mask(seq_len, x.device())?;
 
         let (cos_full, sin_full) = &self.freqs_cis;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (_, layer) in self.layers.iter_mut().enumerate() {
             x = layer.forward(
                 &x,
                 &mask,
@@ -434,7 +429,6 @@ impl DualARTransformer {
                 ),
             )?;
         }
-        x.write_npy("x_end_rs.npy")?;
 
         let x = x.narrow(1, seq_len - 1, 1)?;
         let slow_out = self.norm.forward(&x)?;
@@ -444,9 +438,7 @@ impl DualARTransformer {
         Ok((token_logits, x))
     }
 
-    /// Returns codebook_logits
-    ///
-    /// TODO: Handle `input_pos` and figure out what that's about
+    /// Returns codebook_logits only
     pub fn forward_generate_fast(&mut self, x: &Tensor, input_pos: usize) -> Result<Tensor> {
         let (bsz, seq_len, _) = x.dims3()?;
         // This is a dirty hack but it will work for now
@@ -457,29 +449,23 @@ impl DualARTransformer {
         )?
         .unsqueeze(0)?
         .repeat(bsz)?;
-
         let x = x.reshape((1, 1, ()));
-        let mut x = x?;
 
         let (cos_full, sin_full) = &self.freqs_cis;
         let freqs_cis = (
             &cos_full.i((input_pos..(input_pos + seq_len), ..))?,
             &sin_full.i((input_pos..input_pos + seq_len, ..))?,
         );
-        // let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
-        //     maybe_x.and_then(|x| layer.forward(&x, &fast_mask, freqs_cis))
-        // })?;
-        for layer in self.fast_layers.iter_mut() {
-            x = layer.forward(&x, &fast_mask, freqs_cis)?;
-            // x.write_npy("fast_codebook_01_layer_01_rust.npy")?;
-        }
+        let x = self.fast_layers.iter_mut().fold(x, |maybe_x, layer| {
+            maybe_x.and_then(|x| layer.forward(&x, &fast_mask, freqs_cis))
+        })?;
 
         let fast_out = self.fast_norm.forward(&x)?;
         self.fast_output.forward(&fast_out)
     }
 
     pub fn clear_fast_layer_caches(&mut self) {
-        for layer in self.layers.iter_mut() {
+        for layer in self.fast_layers.iter_mut() {
             layer.attention.clear_cache();
         }
     }
