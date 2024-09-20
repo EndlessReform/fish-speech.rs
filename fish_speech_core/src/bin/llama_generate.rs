@@ -1,5 +1,6 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{ops::softmax_last_dim, Module, VarBuilder};
+// use candle_nn::ops::softmax_last_dim;
+use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
@@ -7,19 +8,19 @@ use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use std::time::Instant;
 
 /// For debugging purposes
-fn print_logprobs(logits: &Tensor) -> Result<()> {
-    let mut lp: Vec<(usize, f32)> = softmax_last_dim(&logits.flatten_all()?)?
-        .to_vec1::<f32>()?
-        .iter()
-        .enumerate()
-        .map(|(idx, p)| (idx, *p))
-        .collect();
-    lp.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    lp.reverse();
-    // println!("Top logprobs: {:?}", lp.iter().take(10));
-    println!("Top logprobs: {:?}", &lp[..5]);
-    Ok(())
-}
+// fn print_logprobs(logits: &Tensor) -> Result<()> {
+//     let mut lp: Vec<(usize, f32)> = softmax_last_dim(&logits.flatten_all()?)?
+//         .to_vec1::<f32>()?
+//         .iter()
+//         .enumerate()
+//         .map(|(idx, p)| (idx, *p))
+//         .collect();
+//     lp.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+//     lp.reverse();
+//     // println!("Top logprobs: {:?}", lp.iter().take(10));
+//     println!("Top logprobs: {:?}", &lp[..5]);
+//     Ok(())
+// }
 
 fn apply_rep_pen(
     logits: &Tensor,
@@ -42,7 +43,6 @@ fn decode_one_token_ar(
     input_pos: usize,
     previous_tokens: Option<&Tensor>,
     sampling_args: &SamplingArgs,
-    write_debug_output: bool,
 ) -> Result<Tensor> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let logits = logits.flatten_all()?;
@@ -97,13 +97,14 @@ fn generate(
 ) -> Result<Tensor> {
     let im_end_id = im_end_id.unwrap_or(4);
 
-    let mut logits_processor = LogitsProcessor::from_sampling(
-        42,
-        Sampling::TopP {
-            temperature: sampling_args.temp,
+    let sampling = match sampling_args.temp {
+        0.0 => Sampling::ArgMax,
+        temp => Sampling::TopP {
+            temperature: temp,
             p: sampling_args.top_p,
         },
-    );
+    };
+    let mut logits_processor = LogitsProcessor::from_sampling(42, sampling);
     let start_pp = Instant::now();
     let mut cur_token = decode_one_token_ar(
         model,
@@ -112,7 +113,6 @@ fn generate(
         0,
         None,
         &sampling_args,
-        false,
     )?;
     let dt = start_pp.elapsed();
     let mut input_pos = prompt.dim(D::Minus1)?;
@@ -123,16 +123,13 @@ fn generate(
     );
 
     let mut previous_tokens = cur_token.clone();
-    // println!(
-    //     "First tokens: {:?}",
-    //     cur_token.flatten_all()?.to_vec1::<u32>()?
-    // );
+    println!(
+        "First tokens: {:?}",
+        cur_token.flatten_all()?.to_vec1::<u32>()?
+    );
 
     let start_decode = Instant::now();
     for i in 1..max_new_tokens {
-        // TODO: handle window in inference code.
-        // WTF does it do?!
-        // Thank god for KV cache
         let next_token = decode_one_token_ar(
             model,
             &mut logits_processor,
@@ -140,13 +137,13 @@ fn generate(
             input_pos,
             Some(&previous_tokens),
             sampling_args,
-            false,
         )?;
-        // next_token.flatten_all()?.to_vec1::<u32>()
-        println!("Token {}", i + 1);
-        // previous_tokens.push(Tensor::from_slice(&next_token[1..], 4, prompt.device())?);
+        println!(
+            "Token {}, {:?}",
+            i + 1,
+            next_token.flatten_all()?.to_vec1::<u32>()?
+        );
         previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
-        // println!("Items: {:?} ", next_token.i((0, 0))?.to_vec0::<u32>()?);
         if let Some(semantic_token) = next_token.i((0, 0))?.to_vec0::<u32>().ok() {
             if semantic_token == im_end_id {
                 break;
@@ -163,7 +160,6 @@ fn generate(
         out_len / dt.as_secs_f64(),
         (out_len / 43.07) / dt.as_secs_f64()
     );
-    // Tensor::cat(&previous_tokens, 0)?.reshape((4, ()))
     previous_tokens.i((1.., ..))
 }
 
@@ -196,6 +192,14 @@ struct Args {
     /// Text to process (required)
     #[arg(long)]
     text: String,
+
+    /// Output file path
+    #[arg(short, long, default_value_t = 1024)]
+    max_new_tokens: usize,
+
+    /// Output file path
+    #[arg(short, long, default_value = "out.npy")]
+    out_path: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -223,7 +227,14 @@ fn main() -> anyhow::Result<()> {
     let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
     println!("Model loaded");
 
-    let res = generate(&mut model, &example_input, 1000, Some(4), &sampling_args)?;
-    res.write_npy("out.npy")?;
+    let res = generate(
+        &mut model,
+        &example_input,
+        args.max_new_tokens,
+        Some(4),
+        &sampling_args,
+    )?;
+    let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
+    res.write_npy(args.out_path)?;
     Ok(())
 }
