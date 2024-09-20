@@ -46,6 +46,7 @@ fn decode_one_token_ar(
 ) -> Result<Tensor> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let logits = logits.flatten_all()?;
+    let repeat_window_size = 16;
 
     // print_logprobs(&logits)?;
     let logits_adj = match previous_tokens {
@@ -53,7 +54,7 @@ fn decode_one_token_ar(
             &logits,
             &ctxt.i((0, ..))?.to_vec1()?,
             sampling_args.repetition_penalty,
-            16,
+            repeat_window_size,
         )?,
         None => logits,
     };
@@ -73,7 +74,7 @@ fn decode_one_token_ar(
                 &logits,
                 &ctxt.i((codebook_idx + 1, ..))?.to_vec1()?,
                 sampling_args.repetition_penalty,
-                16,
+                repeat_window_size,
             )?,
             None => logits,
         };
@@ -97,7 +98,7 @@ fn generate(
     let im_end_id = im_end_id.unwrap_or(4);
 
     let mut logits_processor = LogitsProcessor::from_sampling(
-        0,
+        42,
         Sampling::TopP {
             temperature: sampling_args.temp,
             p: sampling_args.top_p,
@@ -155,10 +156,12 @@ fn generate(
         cur_token = next_token;
     }
     let dt = start_decode.elapsed();
+    let out_len = previous_tokens.dim(1)? as f64;
     println!(
-        "{} tokens generated ({:.2} tokens/s)",
-        previous_tokens.dim(1)?,
-        previous_tokens.dim(1)? as f64 / dt.as_secs_f64()
+        "{} tokens generated ({:.2} tokens/s, RTF: {:.3})",
+        out_len,
+        out_len / dt.as_secs_f64(),
+        (out_len / 43.07) / dt.as_secs_f64()
     );
     // Tensor::cat(&previous_tokens, 0)?.reshape((4, ()))
     previous_tokens.i((1.., ..))
@@ -205,7 +208,7 @@ fn main() -> anyhow::Result<()> {
     // TODO: Read config from checkpoint folder w/ serde; Fish Speech 1.4 support
     let config = BaseModelArgs::fish_speech_1_2();
     // TODO: Tokenization and preprocessing
-    let example_input = Tensor::read_npy("final_prompt.npy")?.to_dtype(DType::U32)?;
+    let example_input = Tensor::read_npy("final_prompt_sn.npy")?.to_dtype(DType::U32)?;
     assert!(example_input.dim(0)? == config.num_codebooks + 1);
     println!("Loaded prompt with shape {:?}", example_input.shape());
 
@@ -220,7 +223,7 @@ fn main() -> anyhow::Result<()> {
     let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
     println!("Model loaded");
 
-    let res = generate(&mut model, &example_input, 100, Some(4), &sampling_args)?;
+    let res = generate(&mut model, &example_input, 1000, Some(4), &sampling_args)?;
     res.write_npy("out.npy")?;
     Ok(())
 }
