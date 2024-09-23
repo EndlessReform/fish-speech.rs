@@ -1,11 +1,14 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-// use candle_nn::ops::softmax_last_dim;
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
+use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
+use std::env;
+use std::path::PathBuf;
 use std::time::Instant;
+use tokenizers::Tokenizer;
 
 /// For debugging purposes
 // fn print_logprobs(logits: &Tensor) -> Result<()> {
@@ -169,7 +172,6 @@ struct SamplingArgs {
     pub repetition_penalty: f32,
 }
 
-/// A simple program to process some text with various settings
 #[derive(Parser, Debug)]
 #[command(
     author = "Jacob Keisling <jacob@keisling.me>",
@@ -199,7 +201,7 @@ struct Args {
 
     /// Output file path
     #[arg(short, long, default_value = "out.npy")]
-    out_path: String,
+    out_path: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -209,19 +211,33 @@ fn main() -> anyhow::Result<()> {
         top_p: args.top_p,
         repetition_penalty: args.repetition_penalty,
     };
+
+    // Plain vanilla CPU inference for debugging purposes
+    // TODO: Hardware acceleration
+    let device = Device::Cpu;
     // TODO: Read config from checkpoint folder w/ serde; Fish Speech 1.4 support
     let config = BaseModelArgs::fish_speech_1_2();
-    // TODO: Tokenization and preprocessing
+    // TODO: Get proper checkpoint folder
+    let path = env::current_dir()?.join("checkpoints/fish-speech-1.2-sft/tokenizer.json");
+    println!("Path: {:?}", path);
+    let tokenizer = Tokenizer::from_file(path).unwrap();
+
+    // TODO:
+    let maybe_conditioning_sequence =
+        encode_tokens(&tokenizer, &args.text, &device, None, config.num_codebooks)?;
     let example_input = Tensor::read_npy("final_prompt_sn.npy")?.to_dtype(DType::U32)?;
     assert!(example_input.dim(0)? == config.num_codebooks + 1);
+    assert_eq!(
+        example_input.to_vec2::<u32>()?,
+        maybe_conditioning_sequence.to_vec2::<u32>()?
+    );
+
     println!("Loaded prompt with shape {:?}", example_input.shape());
 
-    // Plain vanilla CPU f32 inference for debugging purposes
-    // TODO: Hardware acceleration, bf16
     let vb = VarBuilder::from_pth(
         "./checkpoints/fish-speech-1.2-sft/model.pth",
         DType::F32,
-        &Device::Cpu,
+        &device,
     )
     .unwrap();
     let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
@@ -231,10 +247,13 @@ fn main() -> anyhow::Result<()> {
         &mut model,
         &example_input,
         args.max_new_tokens,
-        Some(4),
+        tokenizer
+            .encode("<|im_end|>", false)
+            .ok()
+            .map(|tokens| tokens.get_ids()[0] as u32),
         &sampling_args,
     )?;
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
-    res.write_npy(args.out_path)?;
+    res.write_npy(args.out_path.canonicalize()?)?;
     Ok(())
 }

@@ -4,7 +4,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug fish-speech-candle main encode loop",
+      "name": "Debug fish-speech-candle speaker encode loop",
       "cargo": {
         "args": [
           "build",
@@ -24,6 +24,20 @@
         "-o",
         "./foo.npy"
       ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug llama_generate",
+      "cargo": {
+        "args": ["build", "--bin=llama_generate", "--package=fish_speech_core"]
+      },
+      "program": "${workspaceFolder}/target/debug/llama_generate",
+      "args": ["--text", "Hello world!", "--temp", "0"],
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
       "cwd": "${workspaceFolder}"
     }
   ]
