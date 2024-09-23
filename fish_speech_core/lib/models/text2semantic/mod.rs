@@ -5,26 +5,33 @@ use candle_nn::{
     embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
 use candle_transformers::utils::repeat_kv;
+use serde::Deserialize;
+use serde_json;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
-    pub model_type: String,
-    pub vocab_size: usize,
-    pub n_layer: usize,
-    pub n_fast_layer: usize,
-    pub n_head: usize,
-    pub dim: usize,
-    pub intermediate_size: Option<usize>,
-    pub n_local_heads: usize,
-    pub head_dim: usize,
-    pub rope_base: f32,
-    pub norm_eps: f64,
-    pub max_seq_len: usize,
-    pub dropout: f32,
-    pub tie_word_embeddings: bool,
     pub attention_qkv_bias: bool,
     pub codebook_size: usize,
+    pub dim: usize,
+    pub dropout: f32,
+    pub head_dim: usize,
+    pub initializer_range: f32,
+    pub intermediate_size: Option<usize>,
+    pub max_seq_len: usize,
+    pub model_type: String,
+    pub n_fast_layer: usize,
+    pub n_head: usize,
+    pub n_layer: usize,
+    pub n_local_heads: usize,
+    pub norm_eps: f64,
     pub num_codebooks: usize,
+    pub rope_base: f32,
+    pub tie_word_embeddings: bool,
+    pub use_gradient_checkpointing: bool,
+    pub vocab_size: usize,
 }
 
 impl BaseModelArgs {
@@ -37,6 +44,7 @@ impl BaseModelArgs {
             n_head: 16,
             dim: 1024,
             intermediate_size: Some(4096),
+            initializer_range: 0.02,
             n_local_heads: 2,
             head_dim: 64,
             rope_base: 1000000.0,
@@ -47,7 +55,15 @@ impl BaseModelArgs {
             attention_qkv_bias: false,
             codebook_size: 1024,
             num_codebooks: 4,
+            use_gradient_checkpointing: true,
         }
+    }
+
+    pub fn from_json_file(path: PathBuf) -> serde_json::Result<Self> {
+        let file = File::open(path).expect("Could not open the file");
+        let reader = BufReader::new(file);
+        let config: Self = serde_json::from_reader(reader)?;
+        Ok(config)
     }
 }
 

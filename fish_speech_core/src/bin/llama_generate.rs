@@ -1,3 +1,4 @@
+use anyhow::Error;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -5,7 +6,6 @@ use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
-use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokenizers::Tokenizer;
@@ -172,6 +172,26 @@ struct SamplingArgs {
     pub repetition_penalty: f32,
 }
 
+fn load_prompt_texts(
+    prompt_tokens: &Vec<PathBuf>,
+    prompt_texts: Vec<String>,
+) -> anyhow::Result<Vec<(String, Tensor)>> {
+    if prompt_tokens.len() != prompt_texts.len() {
+        Err(Error::msg(format!(
+            "Prompt token length {:?} does not match prompt text length {:?}",
+            prompt_tokens.len(),
+            prompt_texts.len()
+        )))?
+    }
+
+    let codes: Result<Vec<Tensor>> = prompt_tokens
+        .iter()
+        .map(|path| Tensor::read_npy(path))
+        .collect();
+
+    Ok(prompt_texts.into_iter().zip(codes?.into_iter()).collect())
+}
+
 #[derive(Parser, Debug)]
 #[command(
     author = "Jacob Keisling <jacob@keisling.me>",
@@ -202,6 +222,18 @@ struct Args {
     /// Output file path
     #[arg(short, long, default_value = "out.npy")]
     out_path: PathBuf,
+
+    /// Checkpoint file path (default: "checkpoints/fish-1.2-sft", canonicalized)
+    #[arg(long, default_value = "checkpoints/fish-speech-1.2-sft")]
+    checkpoint: PathBuf,
+
+    /// Optional multiple prompt token files
+    #[arg(long, num_args=1..)]
+    prompt_tokens: Vec<PathBuf>,
+
+    /// Optional multiple prompt text strings
+    #[arg(long, num_args=1..)]
+    prompt_text: Vec<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -212,20 +244,24 @@ fn main() -> anyhow::Result<()> {
         repetition_penalty: args.repetition_penalty,
     };
 
-    // Plain vanilla CPU inference for debugging purposes
     // TODO: Hardware acceleration
     let device = Device::Cpu;
-    // TODO: Read config from checkpoint folder w/ serde; Fish Speech 1.4 support
-    let config = BaseModelArgs::fish_speech_1_2();
-    // TODO: Get proper checkpoint folder
-    let path = env::current_dir()?.join("checkpoints/fish-speech-1.2-sft/tokenizer.json");
-    println!("Path: {:?}", path);
-    let tokenizer = Tokenizer::from_file(path).unwrap();
+    let checkpoint_dir = args.checkpoint.canonicalize().map_err(|_| {
+        Error::msg(format!(
+            "Could not find checkpoint path {:?} relative to current directory",
+            args.checkpoint
+        ))
+    })?;
+    let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
+    let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
 
-    // TODO:
+    let conditioning_prompts = load_prompt_texts(&args.prompt_tokens, args.prompt_text)?;
+    println!("Loaded {} conditioning", conditioning_prompts.len());
+
+    // Encode inputs
+    let example_input = Tensor::read_npy("final_prompt.npy")?.to_dtype(DType::U32)?;
     let maybe_conditioning_sequence =
         encode_tokens(&tokenizer, &args.text, &device, None, config.num_codebooks)?;
-    let example_input = Tensor::read_npy("final_prompt_sn.npy")?.to_dtype(DType::U32)?;
     assert!(example_input.dim(0)? == config.num_codebooks + 1);
     assert_eq!(
         example_input.to_vec2::<u32>()?,
@@ -234,14 +270,9 @@ fn main() -> anyhow::Result<()> {
 
     println!("Loaded prompt with shape {:?}", example_input.shape());
 
-    let vb = VarBuilder::from_pth(
-        "./checkpoints/fish-speech-1.2-sft/model.pth",
-        DType::F32,
-        &device,
-    )
-    .unwrap();
+    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), DType::F32, &device).unwrap();
     let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
-    println!("Model loaded");
+    println!("Model loaded to {:?}", device);
 
     let res = generate(
         &mut model,
