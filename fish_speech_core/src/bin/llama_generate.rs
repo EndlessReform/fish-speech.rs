@@ -256,19 +256,27 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
 
     let conditioning_prompts = load_prompt_texts(&args.prompt_tokens, args.prompt_text)?;
-    println!("Loaded {} conditioning", conditioning_prompts.len());
 
     // Encode inputs
-    let example_input = Tensor::read_npy("final_prompt.npy")?.to_dtype(DType::U32)?;
-    let maybe_conditioning_sequence =
-        encode_tokens(&tokenizer, &args.text, &device, None, config.num_codebooks)?;
-    assert!(example_input.dim(0)? == config.num_codebooks + 1);
-    assert_eq!(
-        example_input.to_vec2::<u32>()?,
-        maybe_conditioning_sequence.to_vec2::<u32>()?
-    );
+    let encoded_prompts: Result<Vec<Tensor>> = conditioning_prompts
+        .iter()
+        .map(|(t, c)| encode_tokens(&tokenizer, &t, &device, Some(c), config.num_codebooks))
+        .collect();
+    let mut encoded_prompts = encoded_prompts?;
+    encoded_prompts.push(encode_tokens(
+        &tokenizer,
+        &args.text,
+        &device,
+        None,
+        config.num_codebooks,
+    )?);
+    // TODO: this is terrible; do more intelligent splitting as per upstream
+    let final_prompt = encoded_prompts
+        .into_iter()
+        .reduce(|acc, e| Tensor::cat(&[acc, e], D::Minus1).unwrap())
+        .unwrap();
 
-    println!("Loaded prompt with shape {:?}", example_input.shape());
+    println!("Loaded prompt with shape {:?}", final_prompt.shape());
 
     let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), DType::F32, &device).unwrap();
     let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
@@ -276,7 +284,7 @@ fn main() -> anyhow::Result<()> {
 
     let res = generate(
         &mut model,
-        &example_input,
+        &final_prompt,
         args.max_new_tokens,
         tokenizer
             .encode("<|im_end|>", false)

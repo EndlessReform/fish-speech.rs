@@ -26,24 +26,24 @@ pub fn encode_tokens(
     if let None = prompt_tokens {
         return Ok(prompt);
     }
-    let prompt_tokens = prompt_tokens.unwrap();
-    let prompt_tokens = match prompt_tokens.dim(0) {
-        Ok(3) => {
+    let prompt_tokens = prompt_tokens.unwrap().to_dtype(DType::U32)?;
+    let prompt_tokens = match prompt_tokens.shape().rank() {
+        3 => {
             assert_eq!(
                 prompt_tokens.dim(0)?,
                 1,
                 "3 dim prompt tokens should have shape (1, num_codebooks, seq_len)"
             );
-            &prompt_tokens.squeeze(0)?
+            prompt_tokens.squeeze(0)?
         }
-        Ok(2) => prompt_tokens,
+        2 => prompt_tokens,
         _ => Err(candle_core::Error::Msg(
             "Prompt tokens must have 2 or 3 dimensions".into(),
         ))?,
     };
     assert_eq!(prompt_tokens.dim(0)?, num_codebooks);
     // Yes, this is inefficient, but +1 actually fails (if you can believe it)
-    let data = prompt_tokens.broadcast_add(&Tensor::ones_like(prompt_tokens)?)?;
+    let data = prompt_tokens.broadcast_add(&Tensor::ones_like(&prompt_tokens)?)?;
 
     // Add pad token for each codebook
     let data = Tensor::cat(
@@ -54,7 +54,7 @@ pub fn encode_tokens(
     // Fill in the speaker line
     let s0_token_id = tokenizer.encode("<|semantic|>", false).unwrap().get_ids()[0];
     let end_token_id = tokenizer.encode("<|im_end|>", false).unwrap().get_ids()[0];
-    let mut main_token_ids = vec![s0_token_id, (data.dim(1)? - 1) as u32];
+    let mut main_token_ids = vec![s0_token_id; data.dim(D::Minus1)? - 1];
     main_token_ids.push(end_token_id);
     let main_token_ids = Tensor::from_vec(main_token_ids, (1, data.dim(1)?), device)?;
 
