@@ -137,11 +137,11 @@ fn precompute_freqs_cis(
     let n_elem = config.dim / config.n_head;
     let theta: Vec<_> = (0..n_elem)
         .step_by(2)
-        .map(|i| 1f64 / (config.rope_base as f64).powf(i as f64 / n_elem as f64))
+        .map(|i| 1f32 / (config.rope_base as f32).powf(i as f32 / n_elem as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
     let idx_theta = Tensor::arange(0, config.max_seq_len as u32, device)?
-        .to_dtype(DType::F64)?
+        .to_dtype(DType::F32)?
         .reshape((config.max_seq_len, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?.to_dtype(dtype)?;

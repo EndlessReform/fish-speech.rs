@@ -298,7 +298,10 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "cuda")]
     let device = Device::cuda_if_available(0)?;
 
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(feature = "metal")]
+    let device = Device::new_metal(0)?;
+
+    #[cfg(not(any(feature = "cuda", feature = "metal")))]
     let device = Device::Cpu;
 
     let checkpoint_dir = args.checkpoint.canonicalize().map_err(|_| {
@@ -309,8 +312,8 @@ fn main() -> anyhow::Result<()> {
     })?;
     let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
-    // TODO: Control by feature flag! This will break back on mac
-    #[cfg(feature = "cuda")]
+    // TODO: Figure out why BF16 is breaking on Metal
+    #[cfg(any(feature = "cuda"))]
     let dtype = DType::BF16;
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;

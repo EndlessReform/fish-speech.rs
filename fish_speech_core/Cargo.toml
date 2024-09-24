@@ -9,6 +9,7 @@ path = "lib/lib.rs"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 [dependencies]
 anyhow = "1.0.86"
