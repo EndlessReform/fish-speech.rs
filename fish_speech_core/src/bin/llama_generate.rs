@@ -294,8 +294,13 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    // TODO: Hardware acceleration
+    // TODO: Control this by feature flag
+    #[cfg(feature = "cuda")]
     let device = Device::cuda_if_available(0)?;
+
+    #[cfg(not(feature = "cuda"))]
+    let device = Device::Cpu;
+
     let checkpoint_dir = args.checkpoint.canonicalize().map_err(|_| {
         Error::msg(format!(
             "Could not find checkpoint path {:?} relative to current directory",
@@ -304,7 +309,12 @@ fn main() -> anyhow::Result<()> {
     })?;
     let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
-    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), DType::F32, &device).unwrap();
+    // TODO: Control by feature flag! This will break back on mac
+    #[cfg(feature = "cuda")]
+    let dtype = DType::BF16;
+    #[cfg(not(feature = "cuda"))]
+    let dtype = DType::F32;
+    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device).unwrap();
     let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
     let mut model = DualARTransformer::load(&vb, &config, semantic_token_id as i64).unwrap();
     println!("Model loaded to {:?}", device);
