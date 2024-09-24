@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         "Warning: Loading precomputed audio for debugging. Please don't use this for production"
     );
 
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let (mut audio, sr) = torchaudio::load(args.src_audio, &device)?;
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
