@@ -20,6 +20,7 @@ candle-nn = { git = "https://github.com/huggingface/candle", rev = "d01207dbf3fb
 candle-transformers = { git = "https://github.com/huggingface/candle", rev = "d01207dbf3fb0ad614e7915c8f5706fbc09902fb" }
 clap = { version = "4.5.16", features = ["derive"] }
 hf-hub = "0.3.2"
+indicatif = "0.17.8"
 rand = "0.8.5"
 regex = "1.10.6"
 serde = { version = "1.0.208", features = ["derive"] }

@@ -6,8 +6,9 @@ use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 /// For debugging purposes
@@ -126,10 +127,16 @@ fn generate(
     );
 
     let mut previous_tokens = cur_token.clone();
-    println!(
-        "First tokens: {:?}",
-        cur_token.flatten_all()?.to_vec1::<u32>()?
+
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg} [{elapsed_precise}] {per_sec} iterations/s")
+            .unwrap()
+            .tick_chars("/|\\- "),
     );
+    spinner.enable_steady_tick(Duration::from_millis(100));
+    spinner.set_message("Generating features");
 
     let start_decode = Instant::now();
     for i in 1..max_new_tokens {
@@ -141,12 +148,9 @@ fn generate(
             Some(&previous_tokens),
             sampling_args,
         )?;
-        println!(
-            "Token {}, {:?}",
-            i + 1,
-            next_token.flatten_all()?.to_vec1::<u32>()?
-        );
         previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
+        spinner.inc(1);
+        spinner.set_message(format!("Tokens: {}", i));
         if let Some(semantic_token) = next_token.i((0, 0))?.to_vec0::<u32>().ok() {
             if semantic_token == im_end_id {
                 break;

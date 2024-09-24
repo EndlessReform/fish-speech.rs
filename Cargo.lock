@@ -692,6 +692,7 @@ dependencies = [
  "candle-transformers",
  "clap",
  "hf-hub",
+ "indicatif",
  "rand",
  "regex",
  "serde",
