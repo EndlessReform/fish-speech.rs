@@ -136,6 +136,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bindgen_cuda"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f8489af5b7d17a81bffe37e0f4d6e1e4de87c87329d05447f22c35d95a1227d"
+dependencies = [
+ "glob",
+ "num_cpus",
+ "rayon",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -222,12 +233,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-core"
+version = "0.7.1"
+source = "git+https://github.com/huggingface/candle?rev=d01207dbf3fb0ad614e7915c8f5706fbc09902fb#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
+dependencies = [
+ "byteorder",
+ "candle-kernels",
+ "cudarc",
+ "gemm",
+ "half",
+ "memmap2",
+ "num-traits",
+ "num_cpus",
+ "rand",
+ "rand_distr",
+ "rayon",
+ "safetensors",
+ "thiserror",
+ "yoke",
+ "zip",
+]
+
+[[package]]
+name = "candle-kernels"
+version = "0.7.1"
+source = "git+https://github.com/huggingface/candle?rev=d01207dbf3fb0ad614e7915c8f5706fbc09902fb#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
+dependencies = [
+ "bindgen_cuda",
+]
+
+[[package]]
 name = "candle-nn"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b006b30f66a0d94fc9cef0ac4de6ce510565f35ae2c6c35ce5d4aacfb0fc8eeb"
 dependencies = [
- "candle-core",
+ "candle-core 0.6.0",
+ "half",
+ "num-traits",
+ "rayon",
+ "safetensors",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "candle-nn"
+version = "0.7.1"
+source = "git+https://github.com/huggingface/candle?rev=d01207dbf3fb0ad614e7915c8f5706fbc09902fb#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
+dependencies = [
+ "candle-core 0.7.1",
  "half",
  "num-traits",
  "rayon",
@@ -238,13 +293,12 @@ dependencies = [
 
 [[package]]
 name = "candle-transformers"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f0d4eb6a0d9279d5829b06b2bf3caa117904eefd6dcf879d16e687c4a84034c"
+version = "0.7.1"
+source = "git+https://github.com/huggingface/candle?rev=d01207dbf3fb0ad614e7915c8f5706fbc09902fb#d01207dbf3fb0ad614e7915c8f5706fbc09902fb"
 dependencies = [
  "byteorder",
- "candle-core",
- "candle-nn",
+ "candle-core 0.7.1",
+ "candle-nn 0.7.1",
  "fancy-regex",
  "num-traits",
  "rand",
@@ -384,6 +438,16 @@ name = "crunchy"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
+
+[[package]]
+name = "cudarc"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38cd60a9a42ec83a2ed7effb0b1f073270264ea99da7acfc44f7e8d74dee0384"
+dependencies = [
+ "half",
+ "libloading",
+]
 
 [[package]]
 name = "darling"
@@ -591,8 +655,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
- "candle-core",
- "candle-nn",
+ "candle-core 0.7.1",
+ "candle-nn 0.7.1",
  "candle-transformers",
  "clap",
  "hf-hub",
@@ -609,8 +673,8 @@ dependencies = [
 name = "fish_speech_python"
 version = "0.1.0"
 dependencies = [
- "candle-core",
- "candle-nn",
+ "candle-core 0.6.0",
+ "candle-nn 0.6.0",
  "fish_speech_core",
  "hf-hub",
  "pyo3",
@@ -882,6 +946,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32085ea23f3234fc7846555e85283ba4de91e21016dc0455a16286d87a292d64"
 
 [[package]]
+name = "glob"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+
+[[package]]
 name = "h2"
 version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1140,6 +1210,16 @@ name = "libc"
 version = "0.2.158"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8adc4bb1803a324070e64a98ae98f38934d91957a99cfb3a43dcbc01bc56439"
+
+[[package]]
+name = "libloading"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
+dependencies = [
+ "cfg-if",
+ "windows-targets 0.48.5",
+]
 
 [[package]]
 name = "libm"

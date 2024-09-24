@@ -178,7 +178,8 @@ fn generate_long(
         repetition_penalty: args.repetition_penalty,
     };
 
-    let conditioning_prompts = load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone())?;
+    let conditioning_prompts =
+        load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone(), &device)?;
 
     let encoded_prompts: Result<Tensor> = conditioning_prompts
         .iter()
@@ -228,6 +229,7 @@ struct SamplingArgs {
 fn load_prompt_texts(
     prompt_tokens: &Vec<PathBuf>,
     prompt_texts: Vec<String>,
+    device: &Device,
 ) -> anyhow::Result<Vec<(String, Tensor)>> {
     if prompt_tokens.len() != prompt_texts.len() {
         Err(Error::msg(format!(
@@ -241,6 +243,7 @@ fn load_prompt_texts(
         .iter()
         .map(|path| Tensor::read_npy(path))
         .collect();
+    let codes: Result<Vec<Tensor>> = codes?.into_iter().map(|c| c.to_device(device)).collect();
 
     Ok(prompt_texts.into_iter().zip(codes?.into_iter()).collect())
 }
@@ -292,7 +295,7 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // TODO: Hardware acceleration
-    let device = Device::Cpu;
+    let device = Device::cuda_if_available(0)?;
     let checkpoint_dir = args.checkpoint.canonicalize().map_err(|_| {
         Error::msg(format!(
             "Could not find checkpoint path {:?} relative to current directory",
