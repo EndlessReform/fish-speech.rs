@@ -166,6 +166,59 @@ fn generate(
     previous_tokens.i((1.., ..))
 }
 
+fn generate_long(
+    model: &mut DualARTransformer,
+    tokenizer: &Tokenizer,
+    args: &Args,
+    device: &Device,
+) -> anyhow::Result<()> {
+    let sampling_args = SamplingArgs {
+        temp: args.temp,
+        top_p: args.top_p,
+        repetition_penalty: args.repetition_penalty,
+    };
+
+    let conditioning_prompts = load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone())?;
+
+    let encoded_prompts: Result<Tensor> = conditioning_prompts
+        .iter()
+        .map(|(t, c)| encode_tokens(&tokenizer, &t, &device, Some(c), model.cfg.num_codebooks))
+        .try_fold(
+            Tensor::from_slice(
+                &(vec![] as Vec<u32>),
+                (model.cfg.num_codebooks + 1, 0),
+                &device,
+            )?,
+            |acc, e| e.and_then(|tensor| Tensor::cat(&[&acc, &tensor], D::Minus1)),
+        );
+    let encoded_prompts = encoded_prompts?;
+    let encoded = vec![encode_tokens(
+        &tokenizer,
+        &args.text,
+        &device,
+        None,
+        model.cfg.num_codebooks,
+    )?];
+    // TODO: this is terrible; do more intelligent splitting as per upstream
+    // let final_prompt = encoded_prompts.into_iter().unwrap();
+    let final_prompt = Tensor::cat(&[encoded_prompts, encoded[0].clone()], D::Minus1)?;
+
+    println!("Loaded prompt with shape {:?}", final_prompt.shape());
+    let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
+
+    let res = generate(
+        model,
+        &final_prompt,
+        args.max_new_tokens,
+        Some(im_end_id),
+        &sampling_args,
+    )?;
+    let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
+    res.write_npy(args.out_path.canonicalize()?)?;
+
+    Ok(())
+}
+
 struct SamplingArgs {
     pub temp: f64,
     pub top_p: f64,
@@ -238,12 +291,6 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let sampling_args = SamplingArgs {
-        temp: args.temp,
-        top_p: args.top_p,
-        repetition_penalty: args.repetition_penalty,
-    };
-
     // TODO: Hardware acceleration
     let device = Device::Cpu;
     let checkpoint_dir = args.checkpoint.canonicalize().map_err(|_| {
@@ -254,45 +301,12 @@ fn main() -> anyhow::Result<()> {
     })?;
     let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
-
-    let conditioning_prompts = load_prompt_texts(&args.prompt_tokens, args.prompt_text)?;
+    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), DType::F32, &device).unwrap();
+    let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+    let mut model = DualARTransformer::load(&vb, &config, semantic_token_id as i64).unwrap();
+    println!("Model loaded to {:?}", device);
+    generate_long(&mut model, &tokenizer, &args, &device)?;
 
     // Encode inputs
-    let encoded_prompts: Result<Vec<Tensor>> = conditioning_prompts
-        .iter()
-        .map(|(t, c)| encode_tokens(&tokenizer, &t, &device, Some(c), config.num_codebooks))
-        .collect();
-    let mut encoded_prompts = encoded_prompts?;
-    encoded_prompts.push(encode_tokens(
-        &tokenizer,
-        &args.text,
-        &device,
-        None,
-        config.num_codebooks,
-    )?);
-    // TODO: this is terrible; do more intelligent splitting as per upstream
-    let final_prompt = encoded_prompts
-        .into_iter()
-        .reduce(|acc, e| Tensor::cat(&[acc, e], D::Minus1).unwrap())
-        .unwrap();
-
-    println!("Loaded prompt with shape {:?}", final_prompt.shape());
-
-    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), DType::F32, &device).unwrap();
-    let mut model = DualARTransformer::load(&vb, &config, 5).unwrap();
-    println!("Model loaded to {:?}", device);
-
-    let res = generate(
-        &mut model,
-        &final_prompt,
-        args.max_new_tokens,
-        tokenizer
-            .encode("<|im_end|>", false)
-            .ok()
-            .map(|tokens| tokens.get_ids()[0] as u32),
-        &sampling_args,
-    )?;
-    let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
-    res.write_npy(args.out_path.canonicalize()?)?;
     Ok(())
 }
