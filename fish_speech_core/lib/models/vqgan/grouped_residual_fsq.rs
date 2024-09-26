@@ -1,5 +1,5 @@
 use super::fsq::{FSQConfig, FSQ};
-use candle_core::{Module, Result, Tensor, D};
+use candle_core::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,8 @@ pub struct ResidualFSQConfig {
 pub struct ResidualFSQ {
     layers: Vec<FSQ>,
     scales: Vec<f32>,
+    scales_tensor: Tensor,
+    codebooks: Tensor,
     num_quantizers: usize,
     project_in: Linear,
     project_out: Linear,
@@ -31,6 +33,11 @@ impl ResidualFSQ {
             })
             .collect();
 
+        let scales_tensor = Tensor::from_vec(scales.clone(), scales.len(), vb.device())?;
+
+        // Step 2: Reshape it to broadcast correctly: (quantize_dim, 1, 1, 1)
+        let scales_tensor = scales_tensor.unsqueeze(1)?.unsqueeze(1)?.unsqueeze(1)?;
+
         for _ in 0..num_quantizers {
             layers.push(FSQ::load(
                 vb.clone(),
@@ -41,6 +48,8 @@ impl ResidualFSQ {
                 },
             )?);
         }
+        let codebooks: Result<Vec<Tensor>> = layers.iter().map(|l| l.implicit_codebook()).collect();
+        let codebooks = Tensor::stack(&codebooks?, 0)?;
         let project_in = Linear::new(
             vb.pp("project_in")
                 .get((codebook_dim, config.dim), "weight")?,
@@ -55,6 +64,8 @@ impl ResidualFSQ {
         Ok(ResidualFSQ {
             layers,
             scales,
+            scales_tensor,
+            codebooks,
             num_quantizers,
             project_in,
             project_out,
@@ -80,9 +91,19 @@ impl ResidualFSQ {
         let all_indices = Tensor::stack(&all_indices, D::Minus1)?;
         Ok((quantized_out, all_indices))
     }
+
+    fn get_codes_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
+        let all_codes = self.codebooks.i(indices)?;
+        all_codes.broadcast_mul(&self.scales_tensor)
+    }
+
+    pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
+        let codes = self.get_codes_from_indices(indices)?;
+        let codes_summed = codes.sum(0)?;
+        self.project_out.forward(&codes_summed)
+    }
 }
 
-// Assuming FSQ is already implemented
 impl Module for ResidualFSQ {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         Ok(self.forward(x)?.0)
@@ -91,7 +112,7 @@ impl Module for ResidualFSQ {
 
 pub struct GroupedResidualFSQ {
     rvqs: Vec<ResidualFSQ>,
-    groups: usize,
+    pub groups: usize,
 }
 
 impl GroupedResidualFSQ {
@@ -139,6 +160,17 @@ impl GroupedResidualFSQ {
         let all_indices = Tensor::stack(&all_indices_chunks, 0)?;
 
         Ok((quantized, all_indices))
+    }
+
+    pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
+        let indices = indices.chunk(self.groups, D::Minus1)?;
+        let out: Result<Vec<Tensor>> = self
+            .rvqs
+            .iter()
+            .zip(indices.iter())
+            .map(|(rvq, chunk_indices)| rvq.get_output_from_indices(&chunk_indices))
+            .collect();
+        Tensor::cat(&out?, D::Minus1)
     }
 }
 

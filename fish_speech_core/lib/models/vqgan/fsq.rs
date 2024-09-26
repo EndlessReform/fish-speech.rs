@@ -69,7 +69,8 @@ impl FSQ {
     }
 
     pub fn bound(&self, z: &Tensor) -> Result<Tensor> {
-        let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
+        // let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
+        let levels_sub_1 = (self.levels.clone() - 1f64)?;
         let half_l = ((levels_sub_1 * 1.001 as f64)? / 2.0 as f64)?;
 
         let remainder = remainder_float(&self.levels, 2.0)?;

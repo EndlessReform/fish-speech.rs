@@ -3,7 +3,8 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
-use fish_speech_core::models::vqgan::FireflyArchitecture;
+use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
+use fish_speech_core::models::vqgan::utils::config::FireflyConfig;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,7 +51,7 @@ fn main() -> Result<()> {
 
     // NOTE: Not using audio for now
     let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?;
-    let encoder = FireflyArchitecture::load(vb)?;
+    let encoder = FireflyEncoder::load(vb, &FireflyConfig::fish_speech_1_2())?;
     // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere
     let result = encoder.encode(&override_mel)?.squeeze(0)?;
     println!("Generated indices of shape {:?}", result.shape());
