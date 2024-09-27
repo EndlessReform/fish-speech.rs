@@ -27,8 +27,8 @@ fn atanh(x: &Tensor) -> Result<Tensor> {
 
 // This is also not implemented as a binary op. Don't ask me why
 fn remainder(x: &Tensor, y: &Tensor) -> Result<Tensor> {
-    let quotient = x.div(y)?.floor()?;
-    x.sub(&quotient.mul(y)?)
+    let quotient = x.broadcast_div(y)?.floor()?;
+    x.broadcast_sub(&quotient.broadcast_mul(y)?)
 }
 
 // This is also not implemented as a binary op. Don't ask me why
@@ -69,7 +69,8 @@ impl FSQ {
     }
 
     pub fn bound(&self, z: &Tensor) -> Result<Tensor> {
-        let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
+        // let levels_sub_1 = self.levels.sub(&Tensor::ones_like(&self.levels)?)?;
+        let levels_sub_1 = (self.levels.clone() - 1f64)?;
         let half_l = ((levels_sub_1 * 1.001 as f64)? / 2.0 as f64)?;
 
         let remainder = remainder_float(&self.levels, 2.0)?;
@@ -120,7 +121,7 @@ impl FSQ {
 
     fn _scale_and_shift_inverse(&self, zhat: &Tensor) -> Result<Tensor> {
         let half_width = (self.levels.clone() / 2.0 as f64)?.floor()?;
-        zhat.broadcast_sub(&half_width)?.div(&half_width)
+        zhat.broadcast_sub(&half_width)?.broadcast_div(&half_width)
     }
 
     pub fn codes_to_indices(&self, zhat: &Tensor) -> Result<Tensor> {
@@ -138,14 +139,9 @@ impl FSQ {
 
     pub fn indices_to_level_indices(&self, indices: &Tensor) -> Result<Tensor> {
         let indices = indices.unsqueeze(D::Minus1)?;
-        let codes_non_centered = indices
-            .div(&self.basis.unsqueeze(0)?.unsqueeze(0)?)?
-            .floor()?;
+        let codes_non_centered = indices.broadcast_div(&self.basis)?.floor()?;
 
-        let codes_non_centered = remainder(
-            &codes_non_centered,
-            &self.levels.unsqueeze(0)?.unsqueeze(0)?,
-        )?;
+        let codes_non_centered = remainder(&codes_non_centered, &self.levels)?;
         Ok(codes_non_centered)
     }
 
@@ -160,7 +156,8 @@ impl FSQ {
     }
 
     pub fn implicit_codebook(&self) -> Result<Tensor> {
-        let indices = Tensor::arange(0, self.codebook_size() as i64, self.levels.device())?;
+        let indices = Tensor::arange(0, self.codebook_size() as i64, self.levels.device())?
+            .to_dtype(DType::F32)?;
         self.indices_to_codes(&indices)
     }
 }

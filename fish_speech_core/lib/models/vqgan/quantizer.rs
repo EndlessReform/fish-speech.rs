@@ -1,44 +1,22 @@
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
+use super::utils::config::DownsampleFSQConfig;
 use candle_core::{Result, Tensor};
 use candle_nn::{
     seq, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, Sequential,
     VarBuilder,
 };
 
-// https://github.com/fishaudio/fish-speech/blob/9e2f5e6b3a382849b8ee54da10d6a68bbd913f4d/fish_speech/models/vqgan/modules/fsq.py#L4
-
-pub struct DownsampleFSQConfig {
-    input_dim: usize,
-    n_codebooks: usize,
-    n_groups: usize,
-    levels: Vec<u32>,
-    downsample_factor: Vec<usize>,
-    downsample_dims: Option<Vec<usize>>,
-}
-
-impl DownsampleFSQConfig {
-    pub fn firefly_1_2() -> Self {
-        Self {
-            input_dim: 512,
-            n_groups: 4,
-            n_codebooks: 1,
-            levels: vec![8, 5, 5, 5],
-            downsample_factor: vec![2],
-            downsample_dims: None,
-        }
-    }
-}
-
 pub struct DownsampleFiniteScalarQuantizer {
     downsample: Sequential,
-    upsample: Sequential,
+    _upsample: Sequential,
     residual_fsq: GroupedResidualFSQ,
+    pub downsample_factor: Vec<usize>,
 }
 
 impl DownsampleFiniteScalarQuantizer {
-    pub fn load(vb: VarBuilder, config: DownsampleFSQConfig) -> Result<Self> {
-        let all_dims: Vec<usize> = if let Some(downsample_dims) = config.downsample_dims {
+    pub fn load(vb: VarBuilder, config: &DownsampleFSQConfig) -> Result<Self> {
+        let all_dims: Vec<usize> = if let Some(downsample_dims) = config.downsample_dims.clone() {
             std::iter::once(config.input_dim)
                 .chain(downsample_dims.into_iter())
                 .collect()
@@ -52,7 +30,7 @@ impl DownsampleFiniteScalarQuantizer {
             vb.pp("residual_fsq"),
             &GroupedResidualFSQConfig {
                 dim: *all_dims.last().unwrap(),
-                levels: config.levels,
+                levels: config.levels.clone(),
                 num_quantizers: config.n_codebooks,
                 groups: config.n_groups,
             },
@@ -111,7 +89,8 @@ impl DownsampleFiniteScalarQuantizer {
         Ok(Self {
             residual_fsq,
             downsample,
-            upsample,
+            downsample_factor: config.downsample_factor.clone(),
+            _upsample: upsample,
         })
     }
 
@@ -135,8 +114,22 @@ impl DownsampleFiniteScalarQuantizer {
         Ok(indices)
     }
 
-    pub fn upsample(self, z: &Tensor) -> Result<Tensor> {
+    pub fn upsample(&self, z: &Tensor) -> Result<Tensor> {
         // TODO: Residual_FSQ
-        self.upsample.forward(z)
+        self._upsample.forward(z)
+    }
+
+    pub fn decode(&self, indices: &Tensor) -> Result<Tensor> {
+        // b (gr) l -> g b l r
+        let (b, gr, l) = indices.dims3()?;
+        let indices = indices.reshape((
+            self.residual_fsq.groups,
+            b,
+            l,
+            gr / self.residual_fsq.groups,
+        ))?;
+        let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
+        println!("z_q shape: {:?}", z_q.shape());
+        self.upsample(&z_q.transpose(1, 2)?)
     }
 }
