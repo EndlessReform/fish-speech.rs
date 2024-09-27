@@ -129,6 +129,7 @@ impl DownsampleFiniteScalarQuantizer {
             gr / self.residual_fsq.groups,
         ))?;
         let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
-        self.upsample(&z_q.t()?)
+        println!("z_q shape: {:?}", z_q.shape());
+        self.upsample(&z_q.transpose(1, 2)?)
     }
 }

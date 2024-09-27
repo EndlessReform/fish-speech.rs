@@ -6,7 +6,8 @@ use super::quantizer::DownsampleFiniteScalarQuantizer;
 use super::utils::config::FireflyConfig;
 
 fn sequence_mask(lengths: &Tensor, max_length: Option<u32>, device: &Device) -> Result<Tensor> {
-    let max_length = max_length.unwrap_or(lengths.max_keepdim(D::Minus1)?.to_scalar::<u32>()?);
+    // If lengths is empty, we have bigger problems
+    let max_length = max_length.unwrap_or(lengths.max_keepdim(D::Minus1)?.to_vec1::<u32>()?[0]);
     let x = Tensor::arange(0 as u32, max_length as u32, device)?.unsqueeze(0)?;
     x.broadcast_lt(&lengths.unsqueeze(1)?)
 }
@@ -30,7 +31,7 @@ impl FireflyDecoder {
         })
     }
 
-    pub fn forward(&self, indices: &Tensor, feature_lengths: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, indices: &Tensor, feature_lengths: &Tensor) -> Result<Tensor> {
         let factor = self
             .quantizer
             .downsample_factor
@@ -45,7 +46,6 @@ impl FireflyDecoder {
             indices.device(),
         )?;
         // TODO: Figure out what dtype it needs to be
-        let mel_masks_float_conv = mel_masks.unsqueeze(1)?;
 
         let audio_masks = sequence_mask(
             &((feature_lengths * (factor as f64))? * self.cfg.spec_transform.hop_length as f64)?,
@@ -54,11 +54,14 @@ impl FireflyDecoder {
         )?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?;
 
-        let z = self
-            .quantizer
-            .decode(indices)?
-            .broadcast_mul(&mel_masks_float_conv);
+        let z = self.quantizer.decode(indices)?;
+        let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
+        println!(
+            "z: {:?}, mel masks: {:?}",
+            z.shape(),
+            mel_masks_float_conv.shape()
+        );
 
-        z
+        z.broadcast_mul(&mel_masks_float_conv)
     }
 }

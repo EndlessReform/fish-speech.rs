@@ -93,14 +93,22 @@ impl ResidualFSQ {
     }
 
     fn get_codes_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
-        let all_codes = self.codebooks.i(indices)?;
+        let (b, t, _) = indices.dims3()?;
+        let all_codes = self.codebooks.gather(
+            &indices
+                .expand((b, t, self.codebooks.dim(D::Minus1)?))?
+                .contiguous()?,
+            1,
+        )?;
+        // let all_codes = self.codebooks.i(indices)?;
         all_codes.broadcast_mul(&self.scales_tensor)
     }
 
     pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
-        let codes = self.get_codes_from_indices(indices)?;
+        let codes = self.get_codes_from_indices(&indices.squeeze(0)?)?;
         let codes_summed = codes.sum(0)?;
-        self.project_out.forward(&codes_summed)
+        let out = self.project_out.forward(&codes_summed)?;
+        Ok(out)
     }
 }
 
@@ -163,7 +171,9 @@ impl GroupedResidualFSQ {
     }
 
     pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
-        let indices = indices.chunk(self.groups, D::Minus1)?;
+        println!("Index shape before chunk: {:?}", indices.shape());
+        let indices = indices.chunk(self.groups, 0)?;
+
         let out: Result<Vec<Tensor>> = self
             .rvqs
             .iter()
