@@ -1,5 +1,27 @@
 # fish-speech.rs
 
+## Initial setup
+
+This repo requires a working Rust installation ([see official docs](https://www.rust-lang.org/tools/install)). Packaging for homebrew and Linux to come.
+
+Unfortunately, we also still need a basic Python environment until Rust-native audio preprocessing is implemented. Let's set up our Python FFI for the speaker conditioning encoder:
+
+```bash
+python -m venv .venv
+pip install -r ./fish_speech_python/requirements.txt
+cd ./fish_speech_python && maturin develop
+```
+
+Save the Fish Speech checkpoints to `./checkpoints`. I recommend using `huggingface-cli`:
+
+```bash
+# TODO: Add example once weights are ported
+```
+
+### System requirements
+
+Nvidia GPU or Apple Silicon recommended. CPU inference is supported as a fallback, but very slow. Please raise an issue if you want CPU accelerated.
+
 ## Usage
 
 For now, we're keeping compatibility with the official Fish Speech inference CLI scripts. (Inference server and Python bindings coming soon!)
@@ -26,6 +48,16 @@ Decode tokens to WAV:
 # Switch to --features cuda for Nvidia GPUs
 cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
 ```
+
+## License
+
+> [!WARNING]
+> This codebase is licensed under the original CC-BY-NC-SA-4.0 license. For non-commercial use only!
+> 
+> Please support the original authors by using the [official API](https://fish.audio/go-api/) for production.
+
+This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
+The source code is released under BSD-3-Clause license.
 
 ## Original README below
 
@@ -59,8 +91,3 @@ If you found this repository useful, please consider citing this work:
   howpublished = {\url{https://github.com/fishaudio/fish-speech}}
 }
 ```
-
-## License
-
-This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
-The source code is released under BSD-3-Clause license.
