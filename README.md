@@ -1,29 +1,23 @@
----
-tags:
-- text-to-speech
-license: cc-by-nc-sa-4.0
-language:
-- zh
-- en
-- de
-- ja
-- fr
-- es
-- ko
-- ar
-pipeline_tag: text-to-speech
-inference: false
-extra_gated_prompt: >-
-  You agree to not use the model to generate contents that violate DMCA or local
-  laws.
-extra_gated_fields:
-  Country: country
-  Specific date: date_picker
-  I agree to use this model for non-commercial use ONLY: checkbox
----
+# fish-speech.rs
+
+## Usage
+
+For now, we're keeping compatibility with the official CLI. (Inference server and Python bindings coming soon!)
+
+Generate audio:
+
+```
+```
+
+Decode audio:
+
+```bash
+# For Nvidia GPUs
+cargo run --release --features cuda --bin vocoder
+```
 
 
-# Fish Speech V1.4
+## Original README below
 
 **Fish Speech V1.4** is a leading text-to-speech (TTS) model trained on 700k hours of audio data in multiple languages.
 

@@ -104,8 +104,6 @@ impl Module for ParallelBlock {
 
 pub struct HiFiGAN {
     conv_pre: Conv1d,
-    num_upsamples: usize,
-    num_kernels: usize,
     ups: Vec<ConvTranspose1d>,
     resblocks: Vec<ParallelBlock>,
     conv_post: Conv1d,
@@ -130,9 +128,6 @@ impl HiFiGAN {
                 groups: 1,
             },
         );
-        let num_upsamples = cfg.upsample_rates.len();
-        let num_kernels = cfg.resblock_kernel_sizes.len();
-
         let mut ups: Vec<ConvTranspose1d> = vec![];
 
         for (i, (u, k)) in cfg
@@ -191,8 +186,6 @@ impl HiFiGAN {
 
         Ok(Self {
             conv_pre,
-            num_upsamples,
-            num_kernels,
             ups,
             resblocks: resblocks?,
             conv_post,

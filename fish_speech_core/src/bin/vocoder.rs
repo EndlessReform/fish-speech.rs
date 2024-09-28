@@ -34,11 +34,13 @@ fn main() -> Result<()> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
 
-    // TODO: Support CUDA;
-    #[cfg(not(feature = "metal"))]
+    #[cfg(feature = "cuda")]
+    let device = Device::new_cuda(0)?;
+
+    #[cfg(not(any(feature = "metal", feature = "cuda")))]
     let device = Device::Cpu;
 
-    // TODO: Support BF16
+    // TODO: BF16 on Metal is mostly unsupported
     #[cfg(feature = "cuda")]
     let dtype = DType::BF16;
 
@@ -71,7 +73,11 @@ fn main() -> Result<()> {
         (fake_audios.dim(D::Minus1)? as f64 / config.spec_transform.sample_rate as f64)
             / dt.as_secs_f64()
     );
-    let pcm = fake_audios.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
+    let pcm = fake_audios
+        .squeeze(0)?
+        .squeeze(0)?
+        .to_dtype(DType::F32)?
+        .to_vec1::<f32>()?;
     let mut output = std::fs::File::create(args.output_path)?;
     write_pcm_as_wav(&mut output, &pcm, config.spec_transform.sample_rate as u32)?;
 

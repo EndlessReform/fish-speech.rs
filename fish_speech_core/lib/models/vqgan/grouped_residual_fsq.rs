@@ -1,5 +1,5 @@
 use super::fsq::{FSQConfig, FSQ};
-use candle_core::{IndexOp, Module, Result, Tensor, D};
+use candle_core::{Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 
 #[derive(Debug, Clone)]
