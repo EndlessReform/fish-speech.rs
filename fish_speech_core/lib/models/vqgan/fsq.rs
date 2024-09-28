@@ -13,7 +13,6 @@ pub struct FSQ {
     levels: Tensor,
     basis: Tensor,
     codebook_dim: usize,
-    effective_codebook_dim: usize,
     n_codebooks: usize,
 }
 
@@ -42,11 +41,10 @@ impl FSQ {
         let device = vb.device();
         let FSQConfig {
             levels,
-            n_codebooks,
+            n_codebooks: _n_codebooks,
             input_dim: _input_dim,
         } = config;
         let codebook_dim = levels.len();
-        let effective_codebook_dim = codebook_dim * n_codebooks;
 
         // Convert u32 to f32 here
         let levels_f32: Vec<f32> = levels.iter().map(|&x| x as f32).collect();
@@ -63,7 +61,6 @@ impl FSQ {
             levels,
             basis,
             codebook_dim,
-            effective_codebook_dim,
             n_codebooks: config.n_codebooks,
         })
     }

@@ -1,5 +1,5 @@
 use super::fsq::{FSQConfig, FSQ};
-use candle_core::{IndexOp, Module, Result, Tensor, D};
+use candle_core::{Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 
 #[derive(Debug, Clone)]
@@ -107,7 +107,9 @@ impl ResidualFSQ {
     pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
         let codes = self.get_codes_from_indices(&indices.squeeze(0)?)?;
         let codes_summed = codes.sum(0)?;
-        let out = self.project_out.forward(&codes_summed)?;
+        let out = self
+            .project_out
+            .forward(&codes_summed.to_dtype(self.project_out.weight().dtype())?)?;
         Ok(out)
     }
 }

@@ -219,27 +219,6 @@ checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 
 [[package]]
 name = "candle-core"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5b18de020c2729dbf7ac390325312644808b6ba9b7962f1f724e9185b1d53c7"
-dependencies = [
- "byteorder",
- "gemm",
- "half",
- "memmap2",
- "num-traits",
- "num_cpus",
- "rand",
- "rand_distr",
- "rayon",
- "safetensors",
- "thiserror",
- "yoke",
- "zip",
-]
-
-[[package]]
-name = "candle-core"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eefd88b58cb1641a6245bfc6aa79032da2fac39da7c3eec1a08da5f16a739a38"
@@ -286,26 +265,11 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b006b30f66a0d94fc9cef0ac4de6ce510565f35ae2c6c35ce5d4aacfb0fc8eeb"
-dependencies = [
- "candle-core 0.6.0",
- "half",
- "num-traits",
- "rayon",
- "safetensors",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "candle-nn"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80a0c5302dd952d02987435bf27c8564d9f681095e69bbb851102a9d6898f70b"
 dependencies = [
- "candle-core 0.7.1",
+ "candle-core",
  "candle-metal-kernels",
  "half",
  "metal",
@@ -323,8 +287,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4faabe4a2993ecb312ab99b4b6b3f18304d4930d35f84585b8bb61b564e3bfb6"
 dependencies = [
  "byteorder",
- "candle-core 0.7.1",
- "candle-nn 0.7.1",
+ "candle-core",
+ "candle-nn",
  "fancy-regex",
  "num-traits",
  "rand",
@@ -692,8 +656,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
- "candle-core 0.7.1",
- "candle-nn 0.7.1",
+ "candle-core",
+ "candle-nn",
  "candle-transformers",
  "clap",
  "hf-hub",
@@ -712,8 +676,8 @@ dependencies = [
 name = "fish_speech_python"
 version = "0.1.0"
 dependencies = [
- "candle-core 0.6.0",
- "candle-nn 0.6.0",
+ "candle-core",
+ "candle-nn",
  "fish_speech_core",
  "hf-hub",
  "pyo3",
