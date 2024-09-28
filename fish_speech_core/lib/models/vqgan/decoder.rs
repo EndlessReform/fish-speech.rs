@@ -21,8 +21,8 @@ pub struct FireflyDecoder {
 impl FireflyDecoder {
     /// TODO: make this configurable!
     pub fn load(vb: &VarBuilder, cfg: &FireflyConfig) -> Result<Self> {
-        let quantizer = DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer)?;
         let head = HiFiGAN::load(vb.pp("head"), &cfg.head)?;
+        let quantizer = DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer)?;
 
         Ok(Self {
             quantizer,

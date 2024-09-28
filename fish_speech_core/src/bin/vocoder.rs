@@ -3,7 +3,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
-use fish_speech_core::models::vqgan::config::FireflyConfig;
+use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
 use fish_speech_core::models::vqgan::decoder::FireflyDecoder;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -23,9 +23,12 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "checkpoints/fish-speech-1.2-sft/firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"
+        default_value = "checkpoints/fish-speech-1.4/firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors"
     )]
     checkpoint_path: PathBuf,
+
+    #[arg(short, long, default_value = "1.4")]
+    version: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -46,12 +49,21 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
-    let vb = VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?;
 
-    // TODO: Support Fish 1.4
+    let config = match args.version {
+        WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
+        _ => FireflyConfig::fish_speech_1_4(),
+    };
+    let vb = match args.version {
+        WhichModel::Fish1_4 => unsafe {
+            VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], dtype, &device)?
+        },
+        _ => VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?,
+    };
+
     println!("Loading model on {:?}", device);
     let start_load = Instant::now();
-    let config = FireflyConfig::fish_speech_1_2();
+    // TODO: Make this configurable from CLI
     let model = FireflyDecoder::load(&vb, &config)?;
     let dt = start_load.elapsed();
     println!("Model loaded in {:.2}s", dt.as_secs_f64());

@@ -57,14 +57,13 @@ fn main() -> Result<()> {
     let audio_duration_sec =
         audio.shape().dims3()?.2 as f64 / (config.spec_transform.sample_rate as f64);
     println!("Encoding {:.2}s of audio", audio_duration_sec);
-    // audio.write_npy("./tests/resources/candle_fish_preprocessed_audio.npy")?;
 
     let dtype = DType::F32;
     let vb = VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?;
 
     // NOTE: Not using audio MEL conversion for now
     let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?.to_device(&device)?;
-    let encoder = FireflyEncoder::load(vb, &FireflyConfig::fish_speech_1_2())?;
+    let encoder = FireflyEncoder::load(vb, &config)?;
     println!("Model loaded");
     let start_decode = Instant::now();
     // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere
