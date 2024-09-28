@@ -1,6 +1,7 @@
 use candle_core::{DType, Device, Shape, Tensor};
 use candle_nn::VarBuilder;
-use fish_speech_core::models::vqgan::FireflyArchitecture;
+use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
+use fish_speech_core::models::vqgan::utils::config::FireflyConfig;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
@@ -10,7 +11,7 @@ fn wrap_err(err: impl std::error::Error) -> PyErr {
 
 #[pyclass(unsendable)]
 struct FishSpeechModel {
-    model: FireflyArchitecture,
+    model: FireflyEncoder,
 }
 
 #[pymethods]
@@ -28,8 +29,9 @@ impl FishSpeechModel {
         let filename = api
             .get("firefly-gan-vq-fsq-4x1024-42hz-generator.pth")
             .map_err(wrap_err)?;
+        let config = FireflyConfig::fish_speech_1_2();
         let vb = VarBuilder::from_pth(&filename, DType::F32, &Device::Cpu).map_err(wrap_err)?;
-        let model = FireflyArchitecture::load(vb)
+        let model = FireflyEncoder::load(vb, &config)
             .map_err(|err| PyException::new_err(format!("Could not load model: error {}", err)))?;
         Ok(Self { model })
     }

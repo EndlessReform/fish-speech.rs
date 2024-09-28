@@ -70,7 +70,8 @@ def main():
     model = FishSpeechModel()
     indices = model.forward(log_mel_spec[np.newaxis, :, :].astype(np.int32))
 
-    np.save(output_path, np.array(indices).astype(np.int32))
+    # NOTE: Original saves to int32, but Candle.rs can't read int32 ndarrays (for some reason)
+    np.save(output_path, np.array(indices).astype(np.float32))
     print(f"Saved output to {output_path}")
 
 

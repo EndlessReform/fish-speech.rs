@@ -18,17 +18,16 @@ Generate speaker conditioning tokens as a `.npy` file:
 
 ```python
 # Saves to input.npy by default
-python encode_audio.py -i input.wav -o output.npy
+python encode_audio.py --output_path ../fake.npy ../tests/resources/sky.wav
 ```
 
 You can use these drop-in with the [official Fish Audio inference script](https://github.com/fishaudio/fish-speech):
 
 ```bash
-# Follow their steps for inference. 
+# Follow their steps for inference.
 # If anything goes wrong take it up with them, the whole point of this repo is to not use that inference stack
 python -m tools.vqgan.inference -i ./output.npy --checkpoint-path "checkpoints/fish-speech-1.2-sft/firefly-gan-vq-fsq-4x1024-42hz-generator.pth"
 ```
-
 
 ### Entry point
 
@@ -41,9 +40,9 @@ from fish_speech import FishSpeechModel
 # Downloads VQGan the first time using HF Hub
 model = FishSpeechModel()
 
-# Fake input ndarray of "audio". 
-# In reality, you'd run preprocessing with librosa 
-mels_shape = (1, 160, 400)  
+# Fake input ndarray of "audio".
+# In reality, you'd run preprocessing with librosa
+mels_shape = (1, 160, 400)
 random_array = np.random.uniform(-1, 1, size=mels_shape)
 
 indices = model.encode(mels)

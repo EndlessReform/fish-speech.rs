@@ -2,27 +2,38 @@
 
 ## Usage
 
-For now, we're keeping compatibility with the official CLI. (Inference server and Python bindings coming soon!)
+For now, we're keeping compatibility with the official Fish Speech inference CLI scripts. (Inference server and Python bindings coming soon!)
 
-Generate audio:
-
-```
-```
-
-Decode audio:
+Generate speaker conditioning tokens (NOTE: this will be replaced with fully native Rust soon):
 
 ```bash
-# For Nvidia GPUs
-cargo run --release --features cuda --bin vocoder
+python fish_speech_python/encode_audio.py --output_path ./fake.npy ./tests/resources/sky.wav
 ```
 
+Generate semantic codebook tokens:
+
+```bash
+# Switch to --features cuda for Nvidia GPUs
+cargo run --release --features metal --bin llama_generate -- \
+  --text "That is not dead which can eternal lie, and with strange aeons even death may die." \
+  --prompt-text "When I heard the release demo, I was shocked, angered, and in disbelief that Mr. Altman would pursue a voice that sounded so eerily similar to mine that my closest friends and news outlets could not tell the difference." \
+  --prompt-tokens fake.npy
+```
+
+Decode tokens to WAV:
+
+```bash
+# Switch to --features cuda for Nvidia GPUs
+cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
+```
 
 ## Original README below
 
 **Fish Speech V1.4** is a leading text-to-speech (TTS) model trained on 700k hours of audio data in multiple languages.
 
 Supported languages:
-- English (en) ~300k hours 
+
+- English (en) ~300k hours
 - Chinese (zh) ~300k hours
 - German (de) ~20k hours
 - Japanese (ja) ~20k hours
