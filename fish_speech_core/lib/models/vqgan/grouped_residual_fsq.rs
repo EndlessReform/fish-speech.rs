@@ -171,7 +171,6 @@ impl GroupedResidualFSQ {
     }
 
     pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {
-        println!("Index shape before chunk: {:?}", indices.shape());
         let indices = indices.chunk(self.groups, 0)?;
 
         let out: Result<Vec<Tensor>> = self

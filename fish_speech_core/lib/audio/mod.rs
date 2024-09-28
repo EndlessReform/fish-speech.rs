@@ -1,6 +1,7 @@
 pub mod functional;
 pub mod pcm_decode;
 pub mod spectrogram;
+pub mod wav;
 
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};

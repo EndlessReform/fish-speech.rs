@@ -96,7 +96,6 @@ impl DownsampleFiniteScalarQuantizer {
 
     pub fn encode(&self, z: &Tensor) -> Result<Tensor> {
         let z = self.downsample.forward(z)?;
-        println!("Index shape before encoding: {:?}", z.shape());
 
         // Transpose z (equivalent to .mT in Python)
         let z_t = z.transpose(1, 2)?;
@@ -129,7 +128,6 @@ impl DownsampleFiniteScalarQuantizer {
             gr / self.residual_fsq.groups,
         ))?;
         let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
-        println!("z_q shape: {:?}", z_q.shape());
         self.upsample(&z_q.transpose(1, 2)?)
     }
 }

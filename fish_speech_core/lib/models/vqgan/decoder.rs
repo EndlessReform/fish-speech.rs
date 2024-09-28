@@ -1,5 +1,5 @@
 use candle_core::{Device, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{Module, VarBuilder};
 
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
@@ -52,16 +52,14 @@ impl FireflyDecoder {
             Some((indices.dim(2)? * factor * self.cfg.spec_transform.hop_length) as u32),
             indices.device(),
         )?;
-        let audio_masks_float_conv = audio_masks.unsqueeze(1)?;
 
         let z = self.quantizer.decode(indices)?;
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
-        println!(
-            "z: {:?}, mel masks: {:?}",
-            z.shape(),
-            mel_masks_float_conv.shape()
-        );
+        let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
-        z.broadcast_mul(&mel_masks_float_conv)
+        let z = z.broadcast_mul(&mel_masks_float_conv)?;
+        self.head
+            .forward(&z)?
+            .broadcast_mul(&audio_masks_float_conv)
     }
 }
