@@ -56,11 +56,6 @@ impl FireflyDecoder {
         let z = self.quantizer.decode(indices)?;
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
-        println!(
-            "z: {:?}, mel masks: {:?}",
-            z.shape(),
-            mel_masks_float_conv.shape()
-        );
 
         let z = z.broadcast_mul(&mel_masks_float_conv)?;
         self.head
