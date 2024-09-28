@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, Shape, Tensor};
 use candle_nn::VarBuilder;
+use fish_speech_core::models::vqgan::config::FireflyConfig;
 use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
-use fish_speech_core::models::vqgan::utils::config::FireflyConfig;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 

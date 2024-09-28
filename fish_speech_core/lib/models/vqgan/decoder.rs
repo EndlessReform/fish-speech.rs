@@ -1,9 +1,9 @@
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 
+use super::config::FireflyConfig;
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
-use super::utils::config::FireflyConfig;
 
 fn sequence_mask(lengths: &Tensor, max_length: Option<u32>, device: &Device) -> Result<Tensor> {
     // If lengths is empty, we have bigger problems

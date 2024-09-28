@@ -1,4 +1,4 @@
-use super::utils::config::HiFiGANConfig;
+use super::config::HiFiGANConfig;
 use candle_core::{Result, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, VarBuilder};
 

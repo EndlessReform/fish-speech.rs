@@ -1,6 +1,6 @@
+use super::config::FireflyConfig;
 use super::convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
 use super::quantizer::DownsampleFiniteScalarQuantizer;
-use super::utils::config::FireflyConfig;
 use anyhow::Result as AnyhowResult;
 use candle_core::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};

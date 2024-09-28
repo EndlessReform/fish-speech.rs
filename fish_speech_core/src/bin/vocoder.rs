@@ -3,8 +3,8 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
+use fish_speech_core::models::vqgan::config::FireflyConfig;
 use fish_speech_core::models::vqgan::decoder::FireflyDecoder;
-use fish_speech_core::models::vqgan::utils::config::FireflyConfig;
 use std::path::PathBuf;
 use std::time::Instant;
 

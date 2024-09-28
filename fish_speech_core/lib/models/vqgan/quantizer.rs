@@ -1,6 +1,6 @@
+use super::config::DownsampleFSQConfig;
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
-use super::utils::config::DownsampleFSQConfig;
 use candle_core::{Result, Tensor};
 use candle_nn::{
     seq, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, Sequential,
