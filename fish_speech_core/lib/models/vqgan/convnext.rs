@@ -1,5 +1,6 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
+use super::{config::WhichModel, utils::FishConvNet};
 use candle_core::{Error, Result, Tensor};
 use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
@@ -38,7 +39,7 @@ impl ConvNeXtBlockConfig {
 
 #[derive(Clone)]
 pub struct ConvNeXtBlock {
-    dwconv: Conv1d,
+    dwconv: FishConvNet,
     norm: LayerNorm,
     pwconv1: Linear,
     pwconv2: Linear,
@@ -46,18 +47,31 @@ pub struct ConvNeXtBlock {
 }
 
 impl ConvNeXtBlock {
-    pub fn load(vb: VarBuilder, config: &ConvNeXtBlockConfig) -> Result<ConvNeXtBlock> {
-        let dwconv = Conv1d::new(
-            vb.get((config.dim, 1_usize, config.kernel_size), "dwconv.weight")?,
-            Some(vb.get(config.dim, "dwconv.bias")?),
+    pub fn load(
+        vb: VarBuilder,
+        config: &ConvNeXtBlockConfig,
+        model: &WhichModel,
+    ) -> Result<ConvNeXtBlock> {
+        let dwconv = FishConvNet::load(
+            vb.pp("dwconv"),
+            1_usize,
+            config.dim,
+            config.kernel_size,
             Conv1dConfig {
-                padding: (config.dilation as f64 * (config.kernel_size as f64 - 1.0) / 2.0).round()
-                    as usize,
+                padding: match model {
+                    WhichModel::Fish1_2 => {
+                        (config.dilation as f64 * (config.kernel_size as f64 - 1.0) / 2.0).round()
+                            as usize
+                    }
+                    _ => 0,
+                },
                 groups: config.dim,
                 dilation: config.dilation,
                 stride: 1,
             },
-        );
+            &model,
+        )?;
+        // println!("In: {}, out: {}, kernel: {}, dilation")
         let norm = LayerNorm::new(
             vb.get(config.dim, "norm.weight")?,
             vb.get(config.dim, "norm.bias")?,
@@ -169,7 +183,11 @@ pub struct ConvNeXtEncoder {
 }
 
 impl ConvNeXtEncoder {
-    pub fn load(vb: VarBuilder, config: &ConvNeXtEncoderConfig) -> Result<ConvNeXtEncoder> {
+    pub fn load(
+        vb: VarBuilder,
+        config: &ConvNeXtEncoderConfig,
+        model: &WhichModel,
+    ) -> Result<ConvNeXtEncoder> {
         if config.depths.len() != config.dims.len() {
             return Err(Error::debug(format!(
                 "ConvNeXtEncoder depths and dims do not match: {}, {}",
@@ -230,6 +248,7 @@ impl ConvNeXtEncoder {
                     ConvNeXtBlock::load(
                         vb.pp(format!("stages.{}.{}", idx, j)),
                         &ConvNeXtBlockConfig::with_dim(config.dims[idx]),
+                        model,
                     )
                 })
                 .collect();
@@ -254,7 +273,6 @@ impl Module for ConvNeXtEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut x = xs.to_owned();
         for (downsampler, block) in self.downsample_layers.iter().zip(self.stages.iter()) {
-            println!("Starting ConvNext layer");
             x = downsampler.forward(&x)?;
             x = block.forward(&x)?;
         }

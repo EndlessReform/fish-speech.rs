@@ -1,9 +1,9 @@
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 
+use super::config::{FireflyConfig, WhichModel};
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
-use super::utils::config::FireflyConfig;
 
 fn sequence_mask(lengths: &Tensor, max_length: Option<u32>, device: &Device) -> Result<Tensor> {
     // If lengths is empty, we have bigger problems
@@ -19,10 +19,10 @@ pub struct FireflyDecoder {
 }
 
 impl FireflyDecoder {
-    /// TODO: make this configurable!
-    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig) -> Result<Self> {
-        let quantizer = DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer)?;
-        let head = HiFiGAN::load(vb.pp("head"), &cfg.head)?;
+    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
+        let quantizer =
+            DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
+        let head = HiFiGAN::load(vb.pp("head"), &cfg.head, model)?;
 
         Ok(Self {
             quantizer,
@@ -45,7 +45,6 @@ impl FireflyDecoder {
             Some((indices.dim(2)? * factor) as u32),
             indices.device(),
         )?;
-        // TODO: Figure out what dtype it needs to be
 
         let audio_masks = sequence_mask(
             &((feature_lengths * (factor as f64))? * self.cfg.spec_transform.hop_length as f64)?,
@@ -54,12 +53,16 @@ impl FireflyDecoder {
         )?;
 
         let z = self.quantizer.decode(indices)?;
+        println!("Tokens dequantized! Starting GAN");
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
         let z = z.broadcast_mul(&mel_masks_float_conv)?;
-        self.head
+        let out = self
+            .head
             .forward(&z)?
-            .broadcast_mul(&audio_masks_float_conv)
+            .broadcast_mul(&audio_masks_float_conv)?;
+        out.write_npy("fish_1_4_decode_rs.npy")?;
+        Ok(out)
     }
 }

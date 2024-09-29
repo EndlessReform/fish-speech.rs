@@ -6,6 +6,7 @@ use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
+use fish_speech_core::models::vqgan::config::WhichModel;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -283,8 +284,8 @@ struct Args {
     #[arg(short, long, default_value = "out.npy")]
     out_path: PathBuf,
 
-    /// Checkpoint file path (default: "checkpoints/fish-1.2-sft", canonicalized)
-    #[arg(long, default_value = "checkpoints/fish-speech-1.2-sft")]
+    /// Checkpoint file path (default: "checkpoints/fish-1.4", canonicalized)
+    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
     checkpoint: PathBuf,
 
     /// Optional multiple prompt token files
@@ -294,6 +295,9 @@ struct Args {
     /// Optional multiple prompt text strings
     #[arg(long, num_args=1..)]
     prompt_text: Vec<String>,
+
+    #[arg(short, long, default_value = "1.4")]
+    fish_version: WhichModel,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -321,12 +325,21 @@ fn main() -> anyhow::Result<()> {
     let dtype = DType::BF16;
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
-    let vb = VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device).unwrap();
+
+    let vb = match args.fish_version {
+        WhichModel::Fish1_4 => unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[checkpoint_dir.join("model.safetensors")],
+                dtype,
+                &device,
+            )?
+        },
+        _ => VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?,
+    };
     let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
     let mut model = DualARTransformer::load(&vb, &config, semantic_token_id as i64).unwrap();
     println!("Model loaded to {:?}", device);
     generate_long(&mut model, &tokenizer, &args, &device)?;
 
-    // Encode inputs
     Ok(())
 }

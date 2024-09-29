@@ -3,8 +3,8 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
+use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
 use fish_speech_core::models::vqgan::decoder::FireflyDecoder;
-use fish_speech_core::models::vqgan::utils::config::FireflyConfig;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -21,11 +21,11 @@ struct Args {
     #[arg(short, long, default_value = "fake.wav")]
     output_path: PathBuf,
 
-    #[arg(
-        long,
-        default_value = "checkpoints/fish-speech-1.2-sft/firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"
-    )]
-    checkpoint_path: PathBuf,
+    #[arg(long, default_value = "checkpoints/fish-speech-1.4/")]
+    checkpoint: PathBuf,
+
+    #[arg(long, default_value = "1.4")]
+    fish_version: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -46,13 +46,34 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
-    let vb = VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?;
 
-    // TODO: Support Fish 1.4
-    println!("Loading model on {:?}", device);
+    let config = match args.fish_version {
+        WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
+        _ => FireflyConfig::fish_speech_1_4(),
+    };
+    let vb = match args.fish_version {
+        // NOTE: Requires weights to have weight norm merged!
+        WhichModel::Fish1_2 => VarBuilder::from_pth(
+            args.checkpoint
+                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
+            dtype,
+            &device,
+        )?,
+        _ => unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[args
+                    .checkpoint
+                    .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
+                dtype,
+                &device,
+            )?
+        },
+    };
+
+    println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
-    let config = FireflyConfig::fish_speech_1_2();
-    let model = FireflyDecoder::load(&vb, &config)?;
+    // TODO: Make this configurable from CLI
+    let model = FireflyDecoder::load(&vb, &config, &args.fish_version)?;
     let dt = start_load.elapsed();
     println!("Model loaded in {:.2}s", dt.as_secs_f64());
 

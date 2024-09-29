@@ -1,5 +1,6 @@
 use serde::Deserialize;
-use std::path::PathBuf;
+// use std::path::PathBuf;
+use clap;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpecTransformConfig {
@@ -10,14 +11,27 @@ pub struct SpecTransformConfig {
     pub win_length: usize,
 }
 
-impl SpecTransformConfig {
-    pub fn fish_1_2() -> Self {
+impl Default for SpecTransformConfig {
+    fn default() -> Self {
         Self {
             sample_rate: 44100,
             n_mels: 160,
             n_fft: 2048,
             hop_length: 512,
             win_length: 2048,
+        }
+    }
+}
+impl SpecTransformConfig {
+    pub fn fish_1_2() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    // Identical from 1.2 -> 1.4
+    pub fn fish_1_4() -> Self {
+        Self {
+            ..Default::default()
         }
     }
 }
@@ -30,15 +44,28 @@ pub struct BackboneConfig {
     pub kernel_size: usize,
 }
 
-impl BackboneConfig {
-    /// Config from Fish Speech 1.2 SFT
-    pub fn fish_1_2() -> Self {
+impl Default for BackboneConfig {
+    fn default() -> Self {
         Self {
             input_channels: 160,
             depths: [3, 3, 9, 3],
             dims: [128, 256, 384, 512],
             // drop_path_rate: 0.2,
             kernel_size: 7,
+        }
+    }
+}
+impl BackboneConfig {
+    /// Config from Fish Speech 1.2 SFT
+    pub fn fish_1_2() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    // Identical from 1.2 -> 1.4
+    pub fn fish_1_4() -> Self {
+        Self {
+            ..Default::default()
         }
     }
 }
@@ -57,8 +84,8 @@ pub struct HiFiGANConfig {
     pub post_conv_kernel_size: usize,
 }
 
-impl HiFiGANConfig {
-    pub fn fish_1_2() -> Self {
+impl Default for HiFiGANConfig {
+    fn default() -> Self {
         Self {
             hop_length: 512,
             upsample_rates: vec![8, 8, 2, 2, 2],
@@ -70,6 +97,18 @@ impl HiFiGANConfig {
             use_template: false,
             pre_conv_kernel_size: 13,
             post_conv_kernel_size: 13,
+        }
+    }
+}
+impl HiFiGANConfig {
+    pub fn fish_1_2() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    pub fn fish_1_4() -> Self {
+        Self {
+            ..Default::default()
         }
     }
 }
@@ -97,6 +136,16 @@ impl DownsampleFSQConfig {
             downsample_dims: None,
         }
     }
+    pub fn firefly_1_4() -> Self {
+        Self {
+            input_dim: 512,
+            n_groups: 8,
+            n_codebooks: 1,
+            levels: vec![8, 5, 5, 5],
+            downsample_dims: None,
+            downsample_factor: vec![2, 2],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,4 +165,21 @@ impl FireflyConfig {
             quantizer: DownsampleFSQConfig::firefly_1_2(),
         }
     }
+    pub fn fish_speech_1_4() -> Self {
+        Self {
+            spec_transform: SpecTransformConfig::fish_1_4(),
+            backbone: BackboneConfig::fish_1_4(),
+            head: HiFiGANConfig::fish_1_4(),
+            quantizer: DownsampleFSQConfig::firefly_1_4(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+pub enum WhichModel {
+    #[value(name = "1.2")]
+    Fish1_2,
+
+    #[value(name = "1.4")]
+    Fish1_4,
 }

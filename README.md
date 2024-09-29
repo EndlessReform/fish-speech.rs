@@ -12,15 +12,21 @@ pip install -r ./fish_speech_python/requirements.txt
 cd ./fish_speech_python && maturin develop
 ```
 
-Save the Fish Speech checkpoints to `./checkpoints`. I recommend using `huggingface-cli`:
+Save the Fish Speech checkpoints to `./checkpoints`. I recommend using [`huggingface-cli`](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli):
 
 ```bash
-# TODO: Add example once weights are ported
+# If it's not already on system
+brew install huggingface-cli
+
+mkdir -p checkpoints/fish-speech-1.4
+huggingface-cli download jkeisling/fish-speech-1.4 --local-dir checkpoints/fish-speech-1.4
 ```
+
+Note that we don't support the official `.pth` weights.
 
 ### System requirements
 
-Nvidia GPU or Apple Silicon recommended. CPU inference is supported as a fallback, but very slow. Please raise an issue if you want CPU accelerated.
+Nvidia GPU or Apple Silicon are highly recommended. CPU inference is supported as a fallback, but it's pretty slow. Please raise an issue if you want CPU accelerated.
 
 ## Usage
 
@@ -32,7 +38,13 @@ Generate speaker conditioning tokens (NOTE: this will be replaced with fully nat
 python fish_speech_python/encode_audio.py --output_path ./fake.npy ./tests/resources/sky.wav
 ```
 
-Generate semantic codebook tokens:
+NOTE: Fish 1.4 support will be added ASAP in the next PR. Until then,
+
+- You can use `tests/resources/sky.npy` as an example conditioning prompt. - You can also create a prompt using the official repo, but be sure to convert the weights to `np.float32` beforehand as Candle can't handle integer npy files.
+
+### Generate semantic codebook tokens
+
+For Fish 1.4 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
@@ -42,18 +54,32 @@ cargo run --release --features metal --bin llama_generate -- \
   --prompt-tokens fake.npy
 ```
 
-Decode tokens to WAV:
+For Fish 1.2, you'll have to specify version and checkpoint explicitly:
+
+```bash
+cargo run --release --features metal --bin llama_generate -- --text "That is not dead which can eternal lie, and with strange aeons even death may die." --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
+```
+
+### Decode tokens to WAV
+
+For Fish 1.4 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
 cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
 ```
 
+For Fish 1.2:
+
+```bash
+cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
+```
+
 ## License
 
 > [!WARNING]
 > This codebase is licensed under the original CC-BY-NC-SA-4.0 license. For non-commercial use only!
-> 
+>
 > Please support the original authors by using the [official API](https://fish.audio/go-api/) for production.
 
 This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
