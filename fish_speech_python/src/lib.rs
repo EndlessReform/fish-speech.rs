@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, Shape, Tensor};
 use candle_nn::VarBuilder;
-use fish_speech_core::models::vqgan::config::FireflyConfig;
+use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
 use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -31,7 +31,7 @@ impl FishSpeechModel {
             .map_err(wrap_err)?;
         let config = FireflyConfig::fish_speech_1_2();
         let vb = VarBuilder::from_pth(&filename, DType::F32, &Device::Cpu).map_err(wrap_err)?;
-        let model = FireflyEncoder::load(vb, &config)
+        let model = FireflyEncoder::load(vb, &config, &WhichModel::Fish1_2)
             .map_err(|err| PyException::new_err(format!("Could not load model: error {}", err)))?;
         Ok(Self { model })
     }

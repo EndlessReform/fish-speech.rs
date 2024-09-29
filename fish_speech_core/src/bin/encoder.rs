@@ -63,7 +63,11 @@ fn main() -> Result<()> {
 
     // NOTE: Not using audio MEL conversion for now
     let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?.to_device(&device)?;
-    let encoder = FireflyEncoder::load(vb, &config)?;
+    let encoder = FireflyEncoder::load(
+        vb,
+        &config,
+        &fish_speech_core::models::vqgan::config::WhichModel::Fish1_2,
+    )?;
     println!("Model loaded");
     let start_decode = Instant::now();
     // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere

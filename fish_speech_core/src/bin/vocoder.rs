@@ -27,8 +27,8 @@ struct Args {
     )]
     checkpoint_path: PathBuf,
 
-    #[arg(short, long, default_value = "1.4")]
-    version: WhichModel,
+    #[arg(long, default_value = "1.4")]
+    fish_version: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -50,21 +50,21 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
 
-    let config = match args.version {
+    let config = match args.fish_version {
         WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
         _ => FireflyConfig::fish_speech_1_4(),
     };
-    let vb = match args.version {
+    let vb = match args.fish_version {
         WhichModel::Fish1_4 => unsafe {
             VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], dtype, &device)?
         },
         _ => VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?,
     };
 
-    println!("Loading model on {:?}", device);
+    println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
     // TODO: Make this configurable from CLI
-    let model = FireflyDecoder::load(&vb, &config)?;
+    let model = FireflyDecoder::load(&vb, &config, &args.fish_version)?;
     let dt = start_load.elapsed();
     println!("Model loaded in {:.2}s", dt.as_secs_f64());
 

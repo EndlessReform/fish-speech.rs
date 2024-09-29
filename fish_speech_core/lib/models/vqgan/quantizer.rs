@@ -1,11 +1,9 @@
-use super::config::DownsampleFSQConfig;
+use super::config::{DownsampleFSQConfig, WhichModel};
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
+use super::utils::{FishConvNet, FishTransConvNet};
 use candle_core::{Result, Tensor};
-use candle_nn::{
-    seq, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, Sequential,
-    VarBuilder,
-};
+use candle_nn::{seq, Conv1dConfig, ConvTranspose1dConfig, Module, Sequential, VarBuilder};
 
 pub struct DownsampleFiniteScalarQuantizer {
     downsample: Sequential,
@@ -15,7 +13,7 @@ pub struct DownsampleFiniteScalarQuantizer {
 }
 
 impl DownsampleFiniteScalarQuantizer {
-    pub fn load(vb: VarBuilder, config: &DownsampleFSQConfig) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &DownsampleFSQConfig, model: &WhichModel) -> Result<Self> {
         let all_dims: Vec<usize> = if let Some(downsample_dims) = config.downsample_dims.clone() {
             std::iter::once(config.input_dim)
                 .chain(downsample_dims.into_iter())
@@ -43,20 +41,21 @@ impl DownsampleFiniteScalarQuantizer {
             let out_channels = all_dims[idx + 1];
 
             let mut layer = seq();
-            layer = layer.add(Conv1d::new(
-                vb_ds.get(
-                    (out_channels, in_channels, *factor),
-                    &format!("{}.0.weight", idx),
-                )?,
-                vb_ds.get(out_channels, &format!("{}.0.bias", idx)).ok(),
+            layer = layer.add(FishConvNet::load(
+                vb_ds.pp(format!("{}.0", idx)),
+                in_channels,
+                out_channels,
+                *factor,
                 Conv1dConfig {
                     stride: *factor,
                     ..Default::default()
                 },
-            ));
+                model,
+            )?);
             layer = layer.add(ConvNeXtBlock::load(
                 vb_ds.pp(&format!("{}.1", idx)),
                 &ConvNeXtBlockConfig::with_dim(out_channels),
+                &model,
             )?);
             downsample = downsample.add(layer);
         }
@@ -68,20 +67,21 @@ impl DownsampleFiniteScalarQuantizer {
             let out_channels = all_dims[idx];
 
             let mut layer = seq();
-            layer = layer.add(ConvTranspose1d::new(
-                vb_us.get(
-                    (out_channels, in_channels, *factor),
-                    &format!("{}.0.weight", idx),
-                )?,
-                vb_us.get(out_channels, &format!("{}.0.bias", idx)).ok(),
+            layer = layer.add(FishTransConvNet::load(
+                vb_us.pp(format!("{}.0", idx)),
+                in_channels,
+                out_channels,
+                *factor,
                 ConvTranspose1dConfig {
                     stride: *factor,
                     ..Default::default()
                 },
-            ));
+                model,
+            )?);
             layer = layer.add(ConvNeXtBlock::load(
                 vb_us.pp(&format!("{}.1", idx)),
                 &ConvNeXtBlockConfig::with_dim(in_channels),
+                &model,
             )?);
             upsample = upsample.add(layer);
         }
@@ -128,6 +128,7 @@ impl DownsampleFiniteScalarQuantizer {
             gr / self.residual_fsq.groups,
         ))?;
         let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
+        z_q.write_npy("z_q_fish14_rust.npy")?;
         self.upsample(&z_q.transpose(1, 2)?)
     }
 }

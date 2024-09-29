@@ -1,4 +1,4 @@
-use super::config::FireflyConfig;
+use super::config::{FireflyConfig, WhichModel};
 use super::convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
 use super::quantizer::DownsampleFiniteScalarQuantizer;
 use anyhow::Result as AnyhowResult;
@@ -11,7 +11,7 @@ pub struct FireflyEncoder {
 }
 
 impl FireflyEncoder {
-    pub fn load(vb: VarBuilder, cfg: &FireflyConfig) -> AnyhowResult<Self> {
+    pub fn load(vb: VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> AnyhowResult<Self> {
         // TODO: This will have to be fixed w/ rest of config
         let backbone = ConvNeXtEncoder::load(
             vb.pp("backbone"),
@@ -22,8 +22,10 @@ impl FireflyEncoder {
                 kernel_size: cfg.backbone.kernel_size,
                 ..Default::default()
             },
+            model,
         )?;
-        let quantizer = DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer)?;
+        let quantizer =
+            DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
         Ok(Self {
             backbone,
             quantizer,

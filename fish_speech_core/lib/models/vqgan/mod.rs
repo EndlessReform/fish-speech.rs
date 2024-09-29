@@ -6,3 +6,4 @@ mod fsq;
 mod grouped_residual_fsq;
 mod hifi_gan;
 pub mod quantizer;
+mod utils;

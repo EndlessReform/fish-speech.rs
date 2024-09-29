@@ -26,9 +26,9 @@ impl ResBlock1 {
             let conv = Conv1d::new(
                 vb.get(
                     (channels, channels, kernel_size),
-                    &format!("convs1.{}.weight", i),
+                    &format!("convs1.{}.conv.weight", i),
                 )?,
-                Some(vb.get(channels, &format!("convs1.{}.bias", i))?),
+                Some(vb.get(channels, &format!("convs1.{}.conv.bias", i))?),
                 Conv1dConfig {
                     stride: 1,
                     dilation: *d,
@@ -43,9 +43,9 @@ impl ResBlock1 {
             let conv = Conv1d::new(
                 vb.get(
                     (channels, channels, kernel_size),
-                    &format!("convs2.{}.weight", i),
+                    &format!("convs2.{}.conv.weight", i),
                 )?,
-                Some(vb.get(channels, &format!("convs2.{}.bias", i))?),
+                Some(vb.get(channels, &format!("convs2.{}.conv.bias", i))?),
                 Conv1dConfig {
                     stride: 1,
                     dilation: 1,
@@ -118,9 +118,9 @@ impl HiFiGAN {
                     cfg.upsample_initial_channel,
                     cfg.pre_conv_kernel_size,
                 ),
-                "conv_pre.weight",
+                "conv_pre.conv.weight",
             )?,
-            Some(vb.get(cfg.upsample_initial_channel, "conv_pre.bias")?),
+            Some(vb.get(cfg.upsample_initial_channel, "conv_pre.conv.bias")?),
             Conv1dConfig {
                 stride: 1,
                 padding: get_padding(cfg.pre_conv_kernel_size, None),
@@ -144,11 +144,11 @@ impl HiFiGAN {
                         cfg.upsample_initial_channel / 2_usize.pow(i as u32 + 1),
                         *k,
                     ),
-                    &format!("ups.{}.weight", i),
+                    &format!("ups.{}.conv.weight", i),
                 )?,
                 Some(vb.get(
                     cfg.upsample_initial_channel / 2_usize.pow(i as u32 + 1),
-                    &format!("ups.{}.bias", i),
+                    &format!("ups.{}.conv.bias", i),
                 )?),
                 ConvTranspose1dConfig {
                     stride: *u,
@@ -174,8 +174,11 @@ impl HiFiGAN {
 
         let ch_final = cfg.upsample_initial_channel / 2_usize.pow(ups.len() as u32);
         let conv_post = Conv1d::new(
-            vb.get((1, ch_final, cfg.post_conv_kernel_size), "conv_post.weight")?,
-            Some(vb.get(1, "conv_post.bias")?),
+            vb.get(
+                (1, ch_final, cfg.post_conv_kernel_size),
+                "conv_post.conv.weight",
+            )?,
+            Some(vb.get(1, "conv_post.conv.bias")?),
             Conv1dConfig {
                 stride: 1,
                 padding: get_padding(cfg.post_conv_kernel_size, None),

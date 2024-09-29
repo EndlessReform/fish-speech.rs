@@ -1,7 +1,7 @@
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 
-use super::config::FireflyConfig;
+use super::config::{FireflyConfig, WhichModel};
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
 
@@ -20,9 +20,10 @@ pub struct FireflyDecoder {
 
 impl FireflyDecoder {
     /// TODO: make this configurable!
-    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
+        let quantizer =
+            DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
         let head = HiFiGAN::load(vb.pp("head"), &cfg.head)?;
-        let quantizer = DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer)?;
 
         Ok(Self {
             quantizer,
@@ -54,6 +55,9 @@ impl FireflyDecoder {
         )?;
 
         let z = self.quantizer.decode(indices)?;
+        println!("Decoded!");
+        z.write_npy("./fish_1_4_quantize_rs.npy")?;
+        panic!("FUCK my life");
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
