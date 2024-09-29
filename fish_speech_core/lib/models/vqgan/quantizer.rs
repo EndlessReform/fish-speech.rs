@@ -77,7 +77,6 @@ impl DownsampleFiniteScalarQuantizer {
                     ..Default::default()
                 },
                 model,
-                idx,
             )?);
             layer = layer.add(ConvNeXtBlock::load(
                 vb_us.pp(&format!("{}.1", idx)),

@@ -77,11 +77,10 @@ impl FishTransConvNet {
         kernel_size: usize,
         config: ConvTranspose1dConfig,
         model: &WhichModel,
-        idx: usize,
     ) -> Result<Self> {
         let conv = ConvTranspose1d::new(
             vb.get(
-                (out_channels, in_channels, kernel_size),
+                (in_channels, out_channels, kernel_size),
                 match model {
                     WhichModel::Fish1_2 => "weight",
                     _ => "conv.weight",

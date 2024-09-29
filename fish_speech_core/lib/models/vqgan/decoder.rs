@@ -23,7 +23,7 @@ impl FireflyDecoder {
     pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
         let quantizer =
             DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
-        let head = HiFiGAN::load(vb.pp("head"), &cfg.head)?;
+        let head = HiFiGAN::load(vb.pp("head"), &cfg.head, model)?;
 
         Ok(Self {
             quantizer,
