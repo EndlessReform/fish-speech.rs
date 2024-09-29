@@ -329,7 +329,7 @@ fn main() -> anyhow::Result<()> {
     let vb = match args.fish_version {
         WhichModel::Fish1_4 => unsafe {
             VarBuilder::from_mmaped_safetensors(
-                &[checkpoint_dir.join("model.pth")],
+                &[checkpoint_dir.join("model.safetensors")],
                 dtype,
                 &device,
             )?
