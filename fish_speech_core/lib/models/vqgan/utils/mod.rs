@@ -77,6 +77,7 @@ impl FishTransConvNet {
         kernel_size: usize,
         config: ConvTranspose1dConfig,
         model: &WhichModel,
+        idx: usize,
     ) -> Result<Self> {
         let conv = ConvTranspose1d::new(
             vb.get(
@@ -95,7 +96,9 @@ impl FishTransConvNet {
             )?),
             config,
         );
-        println!("Config: {:?}", config);
+        // println!("Config at idx {idx}: {:?}", config);
+        // conv.weight()
+        //     .write_npy(format!("conv_weights_{}_rs.npy", idx))?;
         Ok(Self {
             conv,
             stride: config.stride,
@@ -108,7 +111,6 @@ impl FishTransConvNet {
 impl Module for FishTransConvNet {
     fn forward(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
         let x = self.conv.forward(xs)?;
-        x.write_npy("minimal_rust.npy")?;
         let pad = self.kernel_size.saturating_sub(self.stride);
         let padding_right = pad;
         let padding_left = pad - padding_right;
@@ -117,8 +119,6 @@ impl Module for FishTransConvNet {
             _ => x.i((.., .., padding_left..x.dim(D::Minus1)? - padding_right))?,
         };
         let x = x.contiguous()?;
-        x.write_npy("upsample_trans_fish14_rust.npy")?;
-        panic!("Frick");
         Ok(x)
     }
 }

@@ -60,7 +60,7 @@ impl DownsampleFiniteScalarQuantizer {
             downsample = downsample.add(layer);
         }
 
-        let mut upsample = seq();
+        let mut upsample_layers: Vec<Sequential> = vec![];
         let vb_us = vb.pp("upsample");
         for (idx, factor) in config.downsample_factor.iter().enumerate().rev() {
             let in_channels = all_dims[idx + 1];
@@ -77,14 +77,19 @@ impl DownsampleFiniteScalarQuantizer {
                     ..Default::default()
                 },
                 model,
+                idx,
             )?);
             layer = layer.add(ConvNeXtBlock::load(
                 vb_us.pp(&format!("{}.1", idx)),
                 &ConvNeXtBlockConfig::with_dim(in_channels),
                 &model,
             )?);
-            upsample = upsample.add(layer);
+            upsample_layers.push(layer);
         }
+        let upsample = upsample_layers
+            .into_iter()
+            .rev()
+            .fold(seq(), |acc, layer| acc.add(layer));
 
         Ok(Self {
             residual_fsq,
@@ -128,7 +133,6 @@ impl DownsampleFiniteScalarQuantizer {
             gr / self.residual_fsq.groups,
         ))?;
         let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
-        z_q.write_npy("z_q_fish14_rust.npy")?;
         self.upsample(&z_q.transpose(1, 2)?)
     }
 }

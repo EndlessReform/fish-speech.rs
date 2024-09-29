@@ -55,15 +55,17 @@ impl FireflyDecoder {
         )?;
 
         let z = self.quantizer.decode(indices)?;
-        println!("Decoded!");
-        z.write_npy("./fish_1_4_quantize_rs.npy")?;
-        panic!("FUCK my life");
+        println!("Tokens dequantized!");
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
         let z = z.broadcast_mul(&mel_masks_float_conv)?;
-        self.head
+        // z.write_npy("./fish_1_4_quantize_rs.npy")?;
+        let out = self
+            .head
             .forward(&z)?
-            .broadcast_mul(&audio_masks_float_conv)
+            .broadcast_mul(&audio_masks_float_conv)?;
+        out.write_npy("fish_1_4_decode_rs.npy")?;
+        Ok(out)
     }
 }
