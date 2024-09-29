@@ -297,7 +297,7 @@ struct Args {
     prompt_text: Vec<String>,
 
     #[arg(short, long, default_value = "1.4")]
-    version: WhichModel,
+    fish_version: WhichModel,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -326,7 +326,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
 
-    let vb = match args.version {
+    let vb = match args.fish_version {
         WhichModel::Fish1_4 => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[checkpoint_dir.join("model.pth")],

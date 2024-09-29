@@ -43,7 +43,7 @@ impl ResBlock1 {
             convs1.push(conv)
         }
 
-        for i in 0..dilation.len() {
+        for (i, d) in dilation.iter().enumerate() {
             let conv = FishConvNet::load(
                 vb.pp(format!("convs2.{}", i)),
                 channels,
@@ -53,6 +53,10 @@ impl ResBlock1 {
                     padding: match model {
                         WhichModel::Fish1_2 => get_padding(kernel_size, Some(1)),
                         _ => 0,
+                    },
+                    dilation: match model {
+                        WhichModel::Fish1_2 => 1,
+                        _ => *d,
                     },
                     ..Default::default()
                 },
@@ -74,6 +78,8 @@ impl Module for ResBlock1 {
             let xt = c2.forward(&xt)?;
             x = x.add(&xt)?;
         }
+        // x.write_npy("res0_rs.npy")?;
+        // panic!("First res");
         Ok(x)
     }
 }
@@ -204,7 +210,6 @@ impl Module for HiFiGAN {
             let x = u.forward(&xs.silu()?)?;
             xs = r.forward(&x)?;
         }
-        xs.write_npy("hifigan_rs.npy")?;
         let x = self.conv_post.forward(&xs.silu()?)?;
         x.tanh()
     }

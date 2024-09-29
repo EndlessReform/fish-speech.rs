@@ -19,7 +19,6 @@ pub struct FireflyDecoder {
 }
 
 impl FireflyDecoder {
-    /// TODO: make this configurable!
     pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
         let quantizer =
             DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
@@ -46,7 +45,6 @@ impl FireflyDecoder {
             Some((indices.dim(2)? * factor) as u32),
             indices.device(),
         )?;
-        // TODO: Figure out what dtype it needs to be
 
         let audio_masks = sequence_mask(
             &((feature_lengths * (factor as f64))? * self.cfg.spec_transform.hop_length as f64)?,
@@ -55,12 +53,11 @@ impl FireflyDecoder {
         )?;
 
         let z = self.quantizer.decode(indices)?;
-        println!("Tokens dequantized!");
+        println!("Tokens dequantized! Starting GAN");
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
         let z = z.broadcast_mul(&mel_masks_float_conv)?;
-        // z.write_npy("./fish_1_4_quantize_rs.npy")?;
         let out = self
             .head
             .forward(&z)?

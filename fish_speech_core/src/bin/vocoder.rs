@@ -21,11 +21,8 @@ struct Args {
     #[arg(short, long, default_value = "fake.wav")]
     output_path: PathBuf,
 
-    #[arg(
-        long,
-        default_value = "checkpoints/fish-speech-1.4/firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors"
-    )]
-    checkpoint_path: PathBuf,
+    #[arg(long, default_value = "checkpoints/fish-speech-1.4/")]
+    checkpoint: PathBuf,
 
     #[arg(long, default_value = "1.4")]
     fish_version: WhichModel,
@@ -55,10 +52,22 @@ fn main() -> Result<()> {
         _ => FireflyConfig::fish_speech_1_4(),
     };
     let vb = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
-            VarBuilder::from_mmaped_safetensors(&[args.checkpoint_path], dtype, &device)?
+        // NOTE: Requires weights to have weight norm merged!
+        WhichModel::Fish1_2 => VarBuilder::from_pth(
+            args.checkpoint
+                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
+            dtype,
+            &device,
+        )?,
+        _ => unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[args
+                    .checkpoint
+                    .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
+                dtype,
+                &device,
+            )?
         },
-        _ => VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?,
     };
 
     println!("Loading {:?} model on {:?}", args.fish_version, device);

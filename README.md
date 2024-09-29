@@ -32,7 +32,11 @@ Generate speaker conditioning tokens (NOTE: this will be replaced with fully nat
 python fish_speech_python/encode_audio.py --output_path ./fake.npy ./tests/resources/sky.wav
 ```
 
-Generate semantic codebook tokens:
+NOTE: Fish 1.4 support will be added ASAP in the next PR.
+
+### Generate semantic codebook tokens
+
+For Fish 1.4 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
@@ -42,18 +46,32 @@ cargo run --release --features metal --bin llama_generate -- \
   --prompt-tokens fake.npy
 ```
 
-Decode tokens to WAV:
+For Fish 1.2, you'll have to specify version and checkpoint explicitly:
+
+```bash
+cargo run --release --features metal --bin llama_generate -- --text "That is not dead which can eternal lie, and with strange aeons even death may die." --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
+```
+
+### Decode tokens to WAV
+
+For Fish 1.4 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
 cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
 ```
 
+For Fish 1.2:
+
+```bash
+
+```
+
 ## License
 
 > [!WARNING]
 > This codebase is licensed under the original CC-BY-NC-SA-4.0 license. For non-commercial use only!
-> 
+>
 > Please support the original authors by using the [official API](https://fish.audio/go-api/) for production.
 
 This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
