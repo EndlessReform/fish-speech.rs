@@ -12,15 +12,21 @@ pip install -r ./fish_speech_python/requirements.txt
 cd ./fish_speech_python && maturin develop
 ```
 
-Save the Fish Speech checkpoints to `./checkpoints`. I recommend using `huggingface-cli`:
+Save the Fish Speech checkpoints to `./checkpoints`. I recommend using [`huggingface-cli`](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli):
 
 ```bash
-# TODO: Add example once weights are ported
+# If it's not already on system
+brew install huggingface-cli
+
+mkdir -p checkpoints/fish-speech-1.4
+huggingface-cli download jkeisling/fish-speech-1.4 --local-dir checkpoints/fish-speech-1.4
 ```
+
+Note that we don't support the official `.pth` weights.
 
 ### System requirements
 
-Nvidia GPU or Apple Silicon recommended. CPU inference is supported as a fallback, but very slow. Please raise an issue if you want CPU accelerated.
+Nvidia GPU or Apple Silicon are highly recommended. CPU inference is supported as a fallback, but it's pretty slow. Please raise an issue if you want CPU accelerated.
 
 ## Usage
 
@@ -32,7 +38,9 @@ Generate speaker conditioning tokens (NOTE: this will be replaced with fully nat
 python fish_speech_python/encode_audio.py --output_path ./fake.npy ./tests/resources/sky.wav
 ```
 
-NOTE: Fish 1.4 support will be added ASAP in the next PR.
+NOTE: Fish 1.4 support will be added ASAP in the next PR. Until then,
+
+- You can use `tests/resources/sky.npy` as an example conditioning prompt. - You can also create a prompt using the official repo, but be sure to convert the weights to `np.float32` beforehand as Candle can't handle integer npy files.
 
 ### Generate semantic codebook tokens
 
@@ -64,7 +72,7 @@ cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
 For Fish 1.2:
 
 ```bash
-
+cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
 ```
 
 ## License
