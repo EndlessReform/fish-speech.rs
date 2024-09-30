@@ -46,10 +46,11 @@ fn main() -> Result<()> {
     let device = Device::Cpu;
 
     // CPU preprocessing for now
-    let (mut audio, sr) = torchaudio::load(args.src_audio.canonicalize()?, &Device::Cpu)?;
+    let (mut audio, sr) = torchaudio::load(args.src_audio, &Device::Cpu)?;
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
     }
+
 
     let config = FireflyConfig::get_config_for(args.fish_version);
     // Add spurious batch dimension for consistency
@@ -58,6 +59,7 @@ fn main() -> Result<()> {
     let audio_duration_sec =
         audio.shape().dims3()?.2 as f64 / (config.spec_transform.sample_rate as f64);
     println!("Encoding {:.2}s of audio", audio_duration_sec);
+
     let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
     let mels = spec_transform.forward(&audio)?.to_device(&device)?;
     println!("Audio preprocessing complete");
@@ -86,6 +88,7 @@ fn main() -> Result<()> {
 
     let start_decode = Instant::now();
     let result = encoder.encode(&mels)?.squeeze(0)?;
+
     let dt = start_decode.elapsed();
     println!(
         "Processed audio in: {:.2}s (RTF: {:.3})",

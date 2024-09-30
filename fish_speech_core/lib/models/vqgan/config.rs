@@ -172,6 +172,7 @@ impl FireflyConfig {
             quantizer: DownsampleFSQConfig::firefly_1_4(),
         }
     }
+
     pub fn get_config_for(model: WhichModel) -> Self {
         match model {
             WhichModel::Fish1_2 => Self::fish_speech_1_2(),
