@@ -4,14 +4,6 @@
 
 This repo requires a working Rust installation ([see official docs](https://www.rust-lang.org/tools/install)). Packaging for homebrew and Linux to come.
 
-Unfortunately, we also still need a basic Python environment until Rust-native audio preprocessing is implemented. Let's set up our Python FFI for the speaker conditioning encoder:
-
-```bash
-python -m venv .venv
-pip install -r ./fish_speech_python/requirements.txt
-cd ./fish_speech_python && maturin develop
-```
-
 Save the Fish Speech checkpoints to `./checkpoints`. I recommend using [`huggingface-cli`](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli):
 
 ```bash
