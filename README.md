@@ -34,7 +34,7 @@ cargo run --release --features metal --bin encoder -- -i ./tests/resources/sky.w
 For 1.2, you'll need to specify version and checkpoints manually:
 
 ```bash
-cargo run --release --bin encoder -- --input ./tests/resources/sky.wav --output-path sk.npy --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
+cargo run --release --bin encoder -- --input ./tests/resources/sky.wav --output-path fake.npy --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
 ```
 
 ### Generate semantic codebook tokens
