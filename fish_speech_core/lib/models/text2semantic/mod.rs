@@ -268,7 +268,7 @@ impl Attention {
             .contiguous()?;
 
         // Logic copied from phi3.rs
-        let seqlen_offset = match &self.cache.kvs {
+        let _seqlen_offset = match &self.cache.kvs {
             None => 0,
             Some((prev_k, _)) => prev_k.dim(2)?,
         };

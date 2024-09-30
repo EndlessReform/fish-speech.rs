@@ -1,6 +1,5 @@
-use serde::Deserialize;
-// use std::path::PathBuf;
 use clap;
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpecTransformConfig {
@@ -171,6 +170,13 @@ impl FireflyConfig {
             backbone: BackboneConfig::fish_1_4(),
             head: HiFiGANConfig::fish_1_4(),
             quantizer: DownsampleFSQConfig::firefly_1_4(),
+        }
+    }
+
+    pub fn get_config_for(model: WhichModel) -> Self {
+        match model {
+            WhichModel::Fish1_2 => Self::fish_speech_1_2(),
+            WhichModel::Fish1_4 => Self::fish_speech_1_4(),
         }
     }
 }

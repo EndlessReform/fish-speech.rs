@@ -32,15 +32,18 @@ Nvidia GPU or Apple Silicon are highly recommended. CPU inference is supported a
 
 For now, we're keeping compatibility with the official Fish Speech inference CLI scripts. (Inference server and Python bindings coming soon!)
 
-Generate speaker conditioning tokens (NOTE: this will be replaced with fully native Rust soon):
+### Generate speaker conditioning tokens
 
 ```bash
-python fish_speech_python/encode_audio.py --output_path ./fake.npy ./tests/resources/sky.wav
+# saves to fake.npy by default
+cargo run --release --features metal --bin encoder -- -i ./tests/resources/sky.wav
 ```
 
-NOTE: Fish 1.4 support will be added ASAP in the next PR. Until then,
+For 1.2, you'll need to specify version and checkpoints manually:
 
-- You can use `tests/resources/sky.npy` as an example conditioning prompt. - You can also create a prompt using the official repo, but be sure to convert the weights to `np.float32` beforehand as Candle can't handle integer npy files.
+```bash
+cargo run --release --bin encoder -- --input ./tests/resources/sky.wav --output-path sk.npy --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
+```
 
 ### Generate semantic codebook tokens
 
@@ -84,6 +87,11 @@ cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoin
 
 This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
 The source code is released under BSD-3-Clause license.
+
+Massive thanks also go to:
+
+- All `candle_examples` maintainers for highly useful code snippets across the codebase
+- [WaveyAI's mel spec](https://github.com/wavey-ai/mel-spec) for the STFT implementation
 
 ## Original README below
 

@@ -1,24 +1,98 @@
-use anyhow::{bail, Result};
+use super::stft::Spectrogram;
+use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
-use candle_core::{Result as CandleResult, Tensor};
-use candle_transformers::models::whisper::audio::log_mel_spectrogram_;
+use candle_core::{Result as CandleResult, Tensor, D};
+use num::complex::Complex;
 
-/// Load or generate mel filters
-fn load_mel_filters(num_mel_bins: usize) -> Result<Vec<f32>> {
-    // Load mel filters from file or generate them
-    // This should return the mel filters as a vector
-    let mel_bytes = match num_mel_bins {
-        80 => include_bytes!("melfilters.bytes").as_slice(),
-        128 => include_bytes!("melfilters128.bytes").as_slice(),
-        160 => include_bytes!("melfilters160.bytes").as_slice(),
-        _ => bail!("Unexpected num_mel_bins {}", num_mel_bins),
-    };
+fn complex_to_magnitude(spec: Vec<Complex<f64>>, num_freq_bins: usize) -> Vec<f32> {
+    // Truncate the FFT output to keep only the first `num_freq_bins` (1025)
+    spec.iter()
+        .take(num_freq_bins) // Only take the first `1025` bins
+        .map(|c| (c.re.powi(2) + c.im.powi(2)).sqrt() as f32) // Magnitude = sqrt(real^2 + imag^2)
+        .collect()
+}
 
+fn reflect_pad(signal: &[f32], pad_size: usize) -> Vec<f32> {
+    let mut padded = Vec::with_capacity(signal.len() + 2 * pad_size);
+
+    // Reflect left padding
+    padded.extend(signal[0..pad_size].iter().rev());
+
+    // Original signal
+    padded.extend(signal);
+
+    // Reflect right padding
+    padded.extend(signal[(signal.len() - pad_size)..].iter().rev());
+
+    padded
+}
+
+fn linear_spectrogram(samples: &Tensor, fft_size: usize, hop_size: usize) -> CandleResult<Tensor> {
+    let mut spectrogram = Spectrogram::new(fft_size, hop_size);
+
+    // Flatten the tensor to a 1D vector of floats
+    let x_flat = samples.flatten_all()?.to_vec1()?;
+
+    // Padding the signal with reflect padding
+    let pad_size = (fft_size - hop_size) / 2;
+    let padded_signal = reflect_pad(&x_flat, pad_size);
+
+    // Process the signal in hop_size chunks
+    let mut spectrogram_frames = Vec::new();
+
+    // Get the correct number of frequency bins (1025 for n_fft = 2048)
+    let num_freq_bins = fft_size / 2 + 1;
+
+    let mut start = 0;
+    while start + hop_size <= padded_signal.len() {
+        let chunk = &padded_signal[start..start + hop_size];
+
+        // Add the chunk to the spectrogram, which returns a complex-valued result
+        if let Some(spec) = spectrogram.add(chunk) {
+            // Convert complex spectrogram to magnitude and truncate to 1025 bins
+            let magnitude_frame = complex_to_magnitude(spec, num_freq_bins);
+            spectrogram_frames.push(magnitude_frame);
+        }
+
+        start += hop_size;
+    }
+
+    // Handle any remaining data that's less than hop_size
+    if start < padded_signal.len() {
+        let chunk = &padded_signal[start..];
+        if let Some(spec) = spectrogram.add(chunk) {
+            let magnitude_frame = complex_to_magnitude(spec, num_freq_bins);
+            spectrogram_frames.push(magnitude_frame);
+        }
+    }
+
+    // Now, we have all spectrogram frames in magnitude, and we need to stack them into a tensor
+    let num_frames = spectrogram_frames.len(); // Number of time steps
+
+    // Flatten the frames properly
+    let flat_spectrogram: Vec<f32> = spectrogram_frames
+        .into_iter()
+        .flat_map(|frame| frame) // Flatten each frame but maintain frequency count
+        .collect();
+
+    // Ensure the flattened spectrogram has the correct shape: [num_frames, num_freq_bins]
+    Tensor::from_vec(
+        flat_spectrogram,
+        (num_frames, num_freq_bins),
+        samples.device(),
+    )? + 1e-6 // This is the epsilon added for numerical stability
+}
+
+fn load_mel_buffer(n_freqs: usize, num_mel_bins: usize) -> candle_core::Result<Tensor> {
+    let mel_bytes = include_bytes!("melfilters160.bytes").as_slice();
     // Convert bytes to f32 values
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     LittleEndian::read_f32_into(mel_bytes, &mut mel_filters);
-
-    Ok(mel_filters)
+    Tensor::from_vec(
+        mel_filters,
+        (n_freqs, num_mel_bins),
+        &candle_core::Device::Cpu,
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -49,62 +123,38 @@ impl Default for LogMelSpectrogramConfig {
 pub struct LogMelSpectrogram {
     pub sample_rate: usize,
     pub hop_length: usize,
-    n_mels: usize,
     n_fft: usize,
-    mel_filters: Vec<f32>,
+    mel_buffer: Tensor,
 }
 
 impl LogMelSpectrogram {
     pub fn load(config: LogMelSpectrogramConfig) -> Result<Self> {
-        let mel_filters = load_mel_filters(*&config.n_mels)?;
+        let mel_buffer = load_mel_buffer((config.n_fft / 2) + 1, *&config.n_mels)?;
 
         Ok(Self {
             sample_rate: config.sample_rate,
             hop_length: config.hop_length,
-            n_mels: config.n_mels,
             n_fft: config.n_fft,
-            mel_filters,
+            mel_buffer,
         })
     }
 
-    pub fn forward_f32(&self, x: &[f32]) -> Vec<f32> {
-        log_mel_spectrogram_(
-            x,
-            &self.mel_filters,
-            self.n_fft,
-            self.hop_length,
-            self.n_mels,
-            false, // speed_up parameter, set to false for accuracy
-        )
+    fn apply_mel_scale(&self, x: &Tensor) -> CandleResult<Tensor> {
+        let x = x
+            .transpose(D::Minus1, D::Minus1)?
+            .matmul(&self.mel_buffer)?;
+        x.transpose(D::Minus1, D::Minus2)
     }
 
-    // This method works with Tensors (for Fish Speech compatibility)
+    fn compress(&self, x: &Tensor) -> CandleResult<Tensor> {
+        // TODO: What is max? Setting arbitrarily high
+        x.clamp(1e-5, 100.0)?.log()
+    }
+
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
-        // Convert Tensor to f32 slice
-        let x_flat = x.flatten_all()?.to_vec1()?;
-
-        // Process using the f32 method
-        let mel = self.forward_f32(&x_flat);
-
-        // Reshape and convert back to Tensor
-        // Calculate the expected number of frames based on the input length
-        let expected_frames = x_flat.len() / self.hop_length;
-
-        // Reshape and convert back to Tensor
-        let mel_len = mel.len();
-        let frames = mel_len / self.n_mels;
-        let truncated_frames = expected_frames.min(frames);
-
-        // Truncate the mel spectrogram
-        let truncated_mel: Vec<f32> = mel
-            .into_iter()
-            .take(self.n_mels * truncated_frames)
-            .collect();
-
-        Tensor::from_vec(
-            truncated_mel,
-            (1, self.n_mels, truncated_frames),
-            x.device(),
-        )
+        // Assume someone else took care of resampling
+        let linear = linear_spectrogram(x, self.n_fft, self.hop_length)?;
+        let x = self.apply_mel_scale(&linear)?;
+        self.compress(&x)?.unsqueeze(0)
     }
 }

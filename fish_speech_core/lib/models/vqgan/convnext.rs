@@ -200,19 +200,20 @@ impl ConvNeXtEncoder {
         let vb_ds = vb.pp("downsample_layers");
 
         let stem = seq();
-        let stem = stem.add(Conv1d::new(
-            vb_ds.get(
-                (config.dims[0], config.input_channels, config.kernel_size),
-                "0.0.weight",
-            )?,
-            vb_ds.get(config.dims[0], "0.0.bias").ok(),
+        let stem = stem.add(FishConvNet::load(
+            vb_ds.pp("0.0"),
+            config.input_channels,
+            config.dims[0],
+            config.kernel_size,
             Conv1dConfig {
-                padding: config.kernel_size / 2,
-                stride: 1,
-                groups: 1,
-                dilation: 1,
+                padding: match model {
+                    WhichModel::Fish1_2 => config.kernel_size / 2,
+                    _ => 0,
+                },
+                ..Default::default()
             },
-        ));
+            model,
+        )?);
         let stem = stem.add(LayerNormChannelsFirst::load(
             vb_ds.pp("0.1"),
             config.dims[0],
@@ -231,10 +232,7 @@ impl ConvNeXtEncoder {
                 vb_stem.get((config.dims[idx], config.dims[idx - 1], 1), "1.weight")?,
                 Some(vb_stem.get(config.dims[idx], "1.bias")?),
                 Conv1dConfig {
-                    stride: 1,
-                    groups: 1,
-                    dilation: 1,
-                    padding: 0,
+                    ..Default::default()
                 },
             ));
             downsample_layers.push(Box::new(mid_layer));
