@@ -155,7 +155,6 @@ impl LogMelSpectrogram {
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         // Assume someone else took care of resampling
         let linear = linear_spectrogram(x, self.n_fft, self.hop_length)?;
-        println!("Linear: {:?}", linear.shape());
         let x = self.apply_mel_scale(&linear)?;
         self.compress(&x)?.unsqueeze(0)
     }
