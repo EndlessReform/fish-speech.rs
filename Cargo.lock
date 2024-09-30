@@ -662,6 +662,7 @@ dependencies = [
  "clap",
  "hf-hub",
  "indicatif",
+ "num-traits",
  "rand",
  "regex",
  "serde",

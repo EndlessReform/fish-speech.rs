@@ -20,6 +20,7 @@ candle-transformers = "0.7.1"
 clap = { version = "4.5.16", features = ["derive"] }
 hf-hub = "0.3.2"
 indicatif = "0.17.8"
+num-traits = "0.2.19"
 rand = "0.8.5"
 regex = "1.10.6"
 serde = { version = "1.0.208", features = ["derive"] }

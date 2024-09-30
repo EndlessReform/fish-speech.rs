@@ -3,6 +3,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
+use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
 use fish_speech_core::models::vqgan::config::FireflyConfig;
 use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ fn main() -> Result<()> {
     println!("Using device {:?}", device);
 
     // CPU preprocessing for now
-    let (mut audio, sr) = torchaudio::load(args.src_audio, &Device::Cpu)?;
+    let (mut audio, sr) = torchaudio::load(args.src_audio.canonicalize()?, &Device::Cpu)?;
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
     }
@@ -57,9 +58,15 @@ fn main() -> Result<()> {
     let audio_duration_sec =
         audio.shape().dims3()?.2 as f64 / (config.spec_transform.sample_rate as f64);
     println!("Encoding {:.2}s of audio", audio_duration_sec);
+    audio.write_npy("ja_audio_rs.npy")?;
 
     let dtype = DType::F32;
     let vb = VarBuilder::from_pth(args.checkpoint_path, dtype, &device)?;
+
+    let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
+    let mels = spec_transform.forward(&audio)?;
+
+    mels.write_npy("ja1_mels_rs.npy")?;
 
     // NOTE: Not using audio MEL conversion for now
     let override_mel = Tensor::read_npy("spec_transform_fish_c_order.npy")?.to_device(&device)?;
@@ -71,7 +78,7 @@ fn main() -> Result<()> {
     println!("Model loaded");
     let start_decode = Instant::now();
     // Temporarily skipping our own preprocessing code and hard-coding to isolate numerical accuracy elsewhere
-    let result = encoder.encode(&override_mel)?.squeeze(0)?;
+    let result = encoder.encode(&mels)?.squeeze(0)?;
     let dt = start_decode.elapsed();
     println!(
         "Processed audio in: {:.2}s (RTF: {:.3})",
