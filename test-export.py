@@ -21,7 +21,7 @@ original_fb = F.melscale_fbanks(
 )
 
 # Step 2: Load the bytes from the file
-with open("fish_speech_core/lib/audio/melfilters160_old.bytes", "rb") as f:
+with open("fish_speech_core/lib/audio/melfilters160.bytes", "rb") as f:
     fb_bytes = f.read()
 
 # Convert bytes back to a NumPy array (assuming float32)
@@ -41,3 +41,27 @@ else:
 
 # Optionally, print out the difference for debugging
 print("Difference between tensors:", (original_fb - loaded_fb).abs().max())
+
+# Step 6: Load the Rust-generated filterbank
+with open("rust_mel_filters.bin", "rb") as f:
+    rust_fb_bytes = f.read()
+
+# Convert bytes to a NumPy array (assuming float32)
+rust_fb_np = np.frombuffer(rust_fb_bytes, dtype=np.float32)
+
+# Reshape to match the original filterbank shape
+rust_fb_np = rust_fb_np.reshape(original_fb.shape)
+
+# Step 7: Convert NumPy array to PyTorch tensor
+rust_fb = torch.from_numpy(rust_fb_np)
+
+# Step 8: Compare the Rust-generated filterbank with the original
+if torch.allclose(original_fb, rust_fb, atol=1e-6):
+    print("The Rust-generated filterbank matches the original one!")
+else:
+    print("The Rust-generated filterbank does NOT match the original one.")
+
+# Print out the difference for debugging
+print(
+    "Difference between original and Rust tensors:", (original_fb - rust_fb).abs().max()
+)
