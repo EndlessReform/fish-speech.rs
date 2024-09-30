@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, D};
+use candle_core::{DType, Device, D};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
@@ -17,7 +17,7 @@ struct Args {
     src_audio: PathBuf,
 
     /// Output audio file path
-    #[arg(short = 'o', long = "output-path", value_hint = ValueHint::FilePath)]
+    #[arg(short = 'o', long = "output-path", value_hint = ValueHint::FilePath, default_value = "fake.npy")]
     dest_audio: PathBuf,
 
     /// Path to the model checkpoint
@@ -59,12 +59,12 @@ fn main() -> Result<()> {
         audio.shape().dims3()?.2 as f64 / (config.spec_transform.sample_rate as f64);
     println!("Encoding {:.2}s of audio", audio_duration_sec);
     let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
-    let mels = spec_transform.forward(&audio)?;
+    let mels = spec_transform.forward(&audio)?.to_device(&device)?;
     println!("Audio preprocessing complete");
 
     let dtype = DType::F32;
     let model_path = match args.fish_version {
-        WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth",
+        WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator.pth",
         _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
     };
 
