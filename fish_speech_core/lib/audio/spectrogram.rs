@@ -1,11 +1,10 @@
+use super::stft::Spectrogram;
 use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use candle_core::{Result as CandleResult, Tensor, D};
-use mel_spec::prelude::*;
-use ndarray::Array1;
 use num::complex::Complex;
 
-fn complex_to_magnitude(spec: Array1<Complex<f64>>, num_freq_bins: usize) -> Vec<f32> {
+fn complex_to_magnitude(spec: Vec<Complex<f64>>, num_freq_bins: usize) -> Vec<f32> {
     // Truncate the FFT output to keep only the first `num_freq_bins` (1025)
     spec.iter()
         .take(num_freq_bins) // Only take the first `1025` bins

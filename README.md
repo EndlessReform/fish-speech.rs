@@ -88,6 +88,11 @@ cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoin
 This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
 The source code is released under BSD-3-Clause license.
 
+Massive thanks also go to:
+
+- All `candle_examples` maintainers for highly useful code snippets across the codebase
+- [WaveyAI's mel spec](https://github.com/wavey-ai/mel-spec) for the STFT implementation
+
 ## Original README below
 
 **Fish Speech V1.4** is a leading text-to-speech (TTS) model trained on 700k hours of audio data in multiple languages.

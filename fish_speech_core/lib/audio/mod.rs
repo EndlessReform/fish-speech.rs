@@ -1,6 +1,7 @@
 pub mod functional;
 pub mod pcm_decode;
 pub mod spectrogram;
+mod stft;
 pub mod wav;
 
 use anyhow::Result;
