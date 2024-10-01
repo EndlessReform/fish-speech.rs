@@ -43,7 +43,8 @@ fn apply_rep_pen(
 
 fn decode_one_token_ar(
     model: &mut DualARTransformer,
-    logits_processor: &mut LogitsProcessor,
+    fast_logits_processor: &mut LogitsProcessor,
+    slow_logits_processor: &mut LogitsProcessor,
     x: &Tensor,
     input_pos: usize,
     previous_tokens: Option<&Tensor>,
@@ -63,7 +64,7 @@ fn decode_one_token_ar(
         )?,
         None => logits,
     };
-    let semantic_token = logits_processor.sample(&logits_adj)?;
+    let semantic_token = slow_logits_processor.sample(&logits_adj)?;
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 
@@ -83,7 +84,7 @@ fn decode_one_token_ar(
             )?,
             None => logits,
         };
-        let a = logits_processor.sample(&logits_adj.flatten_all()?)?;
+        let a = fast_logits_processor.sample(&logits_adj.flatten_all()?)?;
         // println!("Codebook shape: {:?}", prev_codes[codebook_idx + 1].shape());
         let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
         x = model.fast_embeddings.forward(&a_tensor)?.unsqueeze(0)?;
@@ -109,11 +110,20 @@ fn generate(
             p: sampling_args.top_p,
         },
     };
-    let mut logits_processor = LogitsProcessor::from_sampling(42, sampling);
+    let slow_sampling = match sampling_args.temp {
+        0.0 => Sampling::ArgMax,
+        temp => Sampling::TopK {
+            k: 40,
+            temperature: temp,
+        },
+    };
+    let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
+    let mut slow_logits_processor = LogitsProcessor::from_sampling(42, slow_sampling);
     let start_pp = Instant::now();
     let mut cur_token = decode_one_token_ar(
         model,
-        &mut logits_processor,
+        &mut fast_logits_processor,
+        &mut slow_logits_processor,
         prompt,
         0,
         None,
@@ -143,7 +153,8 @@ fn generate(
     for i in 1..max_new_tokens {
         let next_token = decode_one_token_ar(
             model,
-            &mut logits_processor,
+            &mut fast_logits_processor,
+            &mut slow_logits_processor,
             &cur_token,
             input_pos,
             Some(&previous_tokens),
