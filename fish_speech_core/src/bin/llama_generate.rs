@@ -55,8 +55,14 @@ fn decode_one_token_ar(
     let slow_logits = logits.flatten_all()?;
     let repeat_window_size = 16;
 
-    let mut pad_prob = slow_logits.i(pad_id as usize)?.to_scalar::<f32>()?;
-    let eos_prob = slow_logits.i(im_end_id as usize)?.to_scalar::<f32>()?;
+    let mut pad_prob = slow_logits
+        .i(pad_id as usize)?
+        .to_dtype(DType::F32)?
+        .to_scalar::<f32>()?;
+    let eos_prob = slow_logits
+        .i(im_end_id as usize)?
+        .to_dtype(DType::F32)?
+        .to_scalar::<f32>()?;
 
     if previous_tokens.is_some() {
         pad_prob /= sampling_args.repetition_penalty;
