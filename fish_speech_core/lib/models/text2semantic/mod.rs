@@ -401,25 +401,21 @@ impl DualARTransformer {
     }
 
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        // Embed the initial semantic tokens
-        let token_codebooks = x.chunk(self.cfg.num_codebooks + 1, 0)?;
-        println!("Shape: {:?}", x.shape());
-
-        let maybe_codebooks = x.i((1.., ..))?;
+        let semantic_tokens = x.i((0, ..))?;
+        let codebook_tokens = x.i((1.., ..))?;
         assert!(
-            token_codebooks.len() == self.cfg.num_codebooks + 1,
+            x.dim(D::Minus2)? == self.cfg.num_codebooks + 1,
             "Input tokens must have num_codebooks + 1 codebooks!"
         );
-        let semantic_codes = x.i((0, ..))?;
-        let semantic_embeds = self.embeddings.forward(&semantic_codes)?;
-        // Re-add batch dim if single-batched
+        // Embed semantic tokens, re-add batch dim if single-batched
+        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?;
         let semantic_embeds = match semantic_embeds.rank() {
             2 => semantic_embeds.unsqueeze(0)?,
             _ => semantic_embeds,
         };
 
-        // Offset the codebook ranges 0..1024 so they don't overlap
-        let maybe_codebooks_shifted = maybe_codebooks.broadcast_add(
+        // Offset the ranges for each codebook so they don't overlap
+        let codebook_tokens_shifted = codebook_tokens.broadcast_add(
             &Tensor::arange_step(
                 0 as u32,
                 (self.cfg.num_codebooks * self.cfg.codebook_size) as u32,
@@ -428,48 +424,20 @@ impl DualARTransformer {
             )?
             .unsqueeze(1)?,
         )?;
-        let maybe_codebook_emb = self.codebook_embeddings.forward(&maybe_codebooks_shifted)?;
+        let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
         // Ignore masking for TTS autoregressive generation, it will always be false
         // let should_skip_mask = semantic_codes.dim(D::Minus1)? == 1
         //     && semantic_codes.i((0, 0))?.to_scalar::<i64>()? == self.semantic_token_id;
         // let maybe_codebook_emb = if should_skip_mask {
         //     maybe_codebook_emb
         // } else {
-        let emb_mask = semantic_codes
+        let emb_mask = semantic_tokens
             .eq(self.semantic_token_id)?
             .unsqueeze(D::Minus1)?
-            .to_dtype(maybe_codebook_emb.dtype())?;
-        let maybe_codebook_emb = maybe_codebook_emb.broadcast_mul(&emb_mask)?;
-        let mut vocab_embeds: Vec<Tensor> = vec![semantic_embeds.clone()];
-        println!("Attempting cat");
+            .to_dtype(codebook_emb.dtype())?;
+        let maybe_codebook_emb = codebook_emb.broadcast_mul(&emb_mask)?;
         let x = Tensor::cat(&[semantic_embeds, maybe_codebook_emb], 0)?;
-        println!("Shape before X sum: {:?}", x.shape());
-        let parallel_emb = x.sum_keepdim(0)?;
-        println!("Parallel embedding");
-
-        for i in 0..(self.cfg.num_codebooks) {
-            let shifted_indices = (&token_codebooks[i + 1] + (i * self.cfg.codebook_size) as f64)?;
-            let emb = self.codebook_embeddings.forward(&shifted_indices)?;
-            // Zero out tokens where the semantic token is not the designated ID
-            let emb_mask = &token_codebooks[0]
-                .eq(self.semantic_token_id)?
-                .unsqueeze(D::Minus1)?
-                .to_dtype(emb.dtype())?;
-            let emb = emb.broadcast_mul(emb_mask)?;
-            vocab_embeds.push(emb)
-        }
-        let x = Tensor::stack(&vocab_embeds, 3)?;
-        println!("Shape before X sum: {:?}", x.shape());
-        let res = x.sum(3)?;
-
-        println!(
-            "Done, shapes: {:?} for new, {:?} for old",
-            res.shape(),
-            parallel_emb.shape()
-        );
-        assert_eq!(res.to_vec3::<f32>()?, parallel_emb.to_vec3::<f32>()?);
-        panic!("PUT THE MASK BACK, YOU FOOL");
-        Ok(res)
+        x.sum_keepdim(0)
     }
 
     /// Returns (logits, hidden_states)
