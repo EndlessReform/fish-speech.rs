@@ -44,27 +44,30 @@ fn apply_rep_pen(
 fn decode_one_token_ar(
     model: &mut DualARTransformer,
     fast_logits_processor: &mut LogitsProcessor,
-    slow_logits_processor: &mut LogitsProcessor,
     x: &Tensor,
     input_pos: usize,
+    im_end_id: u32,
+    pad_id: u32,
     previous_tokens: Option<&Tensor>,
     sampling_args: &SamplingArgs,
 ) -> Result<Tensor> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
-    let logits = logits.flatten_all()?;
+    let slow_logits = logits.flatten_all()?;
     let repeat_window_size = 16;
 
-    // print_logprobs(&logits)?;
-    let logits_adj = match previous_tokens {
-        Some(ctxt) => apply_rep_pen(
-            &logits,
-            &ctxt.i((0, ..))?.to_vec1()?,
-            sampling_args.repetition_penalty,
-            repeat_window_size,
-        )?,
-        None => logits,
+    let mut pad_prob = slow_logits.i(pad_id as usize)?.to_scalar::<f32>()?;
+    let eos_prob = slow_logits.i(im_end_id as usize)?.to_scalar::<f32>()?;
+
+    if previous_tokens.is_some() {
+        pad_prob /= sampling_args.repetition_penalty;
+    }
+    // Greedy argmax sampling intended for semantic, per maintainers:
+    // https://github.com/fishaudio/fish-speech/issues/567#issuecomment-2360029630
+    let semantic_token = if pad_prob >= eos_prob {
+        pad_id
+    } else {
+        im_end_id
     };
-    let semantic_token = slow_logits_processor.sample(&logits_adj)?;
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 
@@ -98,11 +101,10 @@ fn generate(
     model: &mut DualARTransformer,
     prompt: &Tensor,
     max_new_tokens: usize,
-    im_end_id: Option<u32>,
+    im_end_id: u32,
+    pad_id: u32,
     sampling_args: &SamplingArgs,
 ) -> Result<Tensor> {
-    let im_end_id = im_end_id.unwrap_or(4);
-
     let sampling = match sampling_args.temp {
         0.0 => Sampling::ArgMax,
         temp => Sampling::TopP {
@@ -110,22 +112,15 @@ fn generate(
             p: sampling_args.top_p,
         },
     };
-    let slow_sampling = match sampling_args.temp {
-        0.0 => Sampling::ArgMax,
-        temp => Sampling::TopK {
-            k: 40,
-            temperature: temp,
-        },
-    };
     let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
-    let mut slow_logits_processor = LogitsProcessor::from_sampling(42, slow_sampling);
     let start_pp = Instant::now();
     let mut cur_token = decode_one_token_ar(
         model,
         &mut fast_logits_processor,
-        &mut slow_logits_processor,
         prompt,
         0,
+        im_end_id,
+        pad_id,
         None,
         &sampling_args,
     )?;
@@ -154,9 +149,10 @@ fn generate(
         let next_token = decode_one_token_ar(
             model,
             &mut fast_logits_processor,
-            &mut slow_logits_processor,
             &cur_token,
             input_pos,
+            im_end_id,
+            pad_id,
             Some(&previous_tokens),
             sampling_args,
         )?;
@@ -222,12 +218,14 @@ fn generate_long(
 
     println!("Loaded prompt with shape {:?}", final_prompt.shape());
     let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
+    let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
 
     let res = generate(
         model,
         &final_prompt,
         args.max_new_tokens,
-        Some(im_end_id),
+        im_end_id,
+        pad_id,
         &sampling_args,
     )?;
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
