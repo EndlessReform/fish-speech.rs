@@ -257,7 +257,6 @@ impl Attention {
             .reshape((bsz, seqlen, self.n_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        // query_states.write_npy("q1_before_rope_rust.npy")?;
         let key_states = key_states
             .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -274,7 +273,6 @@ impl Attention {
         };
         let (query_states, key_states) =
             self.apply_rotary_emb_qkv(&query_states, &key_states, freqs_cis.0, freqs_cis.1)?;
-        // query_states.write_npy("q1_after_rope_rust.npy")?;
         let (key_states, value_states) = match &self.cache.kvs {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
@@ -294,7 +292,6 @@ impl Attention {
         let y =
             self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
-        // y.write_npy("y1_after_sdpa_rust.npy")?;
 
         self.wo.forward(&y)
     }
@@ -406,17 +403,53 @@ impl DualARTransformer {
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
         // Embed the initial semantic tokens
         let token_codebooks = x.chunk(self.cfg.num_codebooks + 1, 0)?;
+        println!("Shape: {:?}", x.shape());
+
+        let maybe_codebooks = x.i((1.., ..))?;
         assert!(
             token_codebooks.len() == self.cfg.num_codebooks + 1,
             "Input tokens must have num_codebooks + 1 codebooks!"
         );
-        let semantic_tokens = &token_codebooks[0];
+        let semantic_codes = x.i((0, ..))?;
+        let semantic_embeds = self.embeddings.forward(&semantic_codes)?;
+        // Re-add batch dim if single-batched
+        let semantic_embeds = match semantic_embeds.rank() {
+            2 => semantic_embeds.unsqueeze(0)?,
+            _ => semantic_embeds,
+        };
 
-        let mut vocab_embeds: Vec<Tensor> = vec![self.embeddings.forward(semantic_tokens)?];
+        // Offset the codebook ranges 0..1024 so they don't overlap
+        let maybe_codebooks_shifted = maybe_codebooks.broadcast_add(
+            &Tensor::arange_step(
+                0 as u32,
+                (self.cfg.num_codebooks * self.cfg.codebook_size) as u32,
+                self.cfg.codebook_size as u32,
+                x.device(),
+            )?
+            .unsqueeze(1)?,
+        )?;
+        let maybe_codebook_emb = self.codebook_embeddings.forward(&maybe_codebooks_shifted)?;
+        // Ignore masking for TTS autoregressive generation, it will always be false
+        // let should_skip_mask = semantic_codes.dim(D::Minus1)? == 1
+        //     && semantic_codes.i((0, 0))?.to_scalar::<i64>()? == self.semantic_token_id;
+        // let maybe_codebook_emb = if should_skip_mask {
+        //     maybe_codebook_emb
+        // } else {
+        let emb_mask = semantic_codes
+            .eq(self.semantic_token_id)?
+            .unsqueeze(D::Minus1)?
+            .to_dtype(maybe_codebook_emb.dtype())?;
+        let maybe_codebook_emb = maybe_codebook_emb.broadcast_mul(&emb_mask)?;
+        let mut vocab_embeds: Vec<Tensor> = vec![semantic_embeds.clone()];
+        println!("Attempting cat");
+        let x = Tensor::cat(&[semantic_embeds, maybe_codebook_emb], 0)?;
+        println!("Shape before X sum: {:?}", x.shape());
+        let parallel_emb = x.sum_keepdim(0)?;
+        println!("Parallel embedding");
 
         for i in 0..(self.cfg.num_codebooks) {
-            let shifted_indices = &token_codebooks[i + 1] + (i * self.cfg.codebook_size) as f64;
-            let emb = self.codebook_embeddings.forward(&shifted_indices?)?;
+            let shifted_indices = (&token_codebooks[i + 1] + (i * self.cfg.codebook_size) as f64)?;
+            let emb = self.codebook_embeddings.forward(&shifted_indices)?;
             // Zero out tokens where the semantic token is not the designated ID
             let emb_mask = &token_codebooks[0]
                 .eq(self.semantic_token_id)?
@@ -426,12 +459,22 @@ impl DualARTransformer {
             vocab_embeds.push(emb)
         }
         let x = Tensor::stack(&vocab_embeds, 3)?;
-        x.sum(3)
+        println!("Shape before X sum: {:?}", x.shape());
+        let res = x.sum(3)?;
+
+        println!(
+            "Done, shapes: {:?} for new, {:?} for old",
+            res.shape(),
+            parallel_emb.shape()
+        );
+        assert_eq!(res.to_vec3::<f32>()?, parallel_emb.to_vec3::<f32>()?);
+        panic!("PUT THE MASK BACK, YOU FOOL");
+        Ok(res)
     }
 
     /// Returns (logits, hidden_states)
     pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
-        let (__size, seq_len) = inp.dims2()?;
+        let seq_len = inp.dim(1)?;
         let mut x = self.embed(inp)?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
