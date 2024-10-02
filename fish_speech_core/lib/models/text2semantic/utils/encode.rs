@@ -52,8 +52,8 @@ pub fn encode_tokens(
     )?;
 
     // Fill in the speaker line
-    let s0_token_id = tokenizer.encode("<|semantic|>", false).unwrap().get_ids()[0];
-    let end_token_id = tokenizer.encode("<|im_end|>", false).unwrap().get_ids()[0];
+    let s0_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+    let end_token_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
     let mut main_token_ids = vec![s0_token_id; data.dim(D::Minus1)? - 1];
     main_token_ids.push(end_token_id);
     let main_token_ids = Tensor::from_vec(main_token_ids, (1, data.dim(1)?), device)?;

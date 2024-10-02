@@ -62,7 +62,6 @@ impl FireflyDecoder {
             .head
             .forward(&z)?
             .broadcast_mul(&audio_masks_float_conv)?;
-        out.write_npy("fish_1_4_decode_rs.npy")?;
         Ok(out)
     }
 }

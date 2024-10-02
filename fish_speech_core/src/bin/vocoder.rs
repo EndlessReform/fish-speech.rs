@@ -81,7 +81,9 @@ fn main() -> Result<()> {
     let feature_lengths = Tensor::from_slice(&[input.dim(D::Minus1)? as u32], 1, &device)?;
 
     let start_decode = Instant::now();
-    let fake_audios = model.decode(&input.unsqueeze(0)?, &feature_lengths)?;
+    let fake_audios = model
+        .decode(&input.unsqueeze(0)?, &feature_lengths)?
+        .to_dtype(DType::F32)?;
 
     let dt = start_decode.elapsed();
     println!(
