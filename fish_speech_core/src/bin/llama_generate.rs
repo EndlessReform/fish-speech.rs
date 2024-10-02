@@ -235,7 +235,7 @@ fn generate_long(
         &sampling_args,
     )?;
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
-    res.write_npy(args.out_path.canonicalize()?)?;
+    res.write_npy(&args.out_path)?;
 
     Ok(())
 }
