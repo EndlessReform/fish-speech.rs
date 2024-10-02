@@ -113,9 +113,10 @@ fn generate(
 ) -> Result<Tensor> {
     let sampling = match sampling_args.temp {
         0.0 => Sampling::ArgMax,
-        temp => Sampling::TopP {
+        temp => Sampling::TopKThenTopP {
             temperature: temp,
             p: sampling_args.top_p,
+            k: sampling_args.top_k,
         },
     };
     let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
@@ -193,6 +194,7 @@ fn generate_long(
     let sampling_args = SamplingArgs {
         temp: args.temp,
         top_p: args.top_p,
+        top_k: args.top_k,
         repetition_penalty: args.repetition_penalty,
     };
 
@@ -243,6 +245,7 @@ fn generate_long(
 struct SamplingArgs {
     pub temp: f64,
     pub top_p: f64,
+    pub top_k: usize,
     pub repetition_penalty: f32,
 }
 
@@ -282,6 +285,10 @@ struct Args {
     /// Top-p sampling parameter
     #[arg(long, default_value_t = 0.7)]
     top_p: f64,
+
+    /// Top-k sampling parameter. Set high by default
+    #[arg(long, default_value_t = 256)]
+    top_k: usize,
 
     /// Penalty for repetition
     #[arg(long, default_value_t = 1.2)]
