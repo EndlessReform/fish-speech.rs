@@ -425,18 +425,11 @@ impl DualARTransformer {
             .unsqueeze(1)?,
         )?;
         let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
-        // Ignore masking for TTS autoregressive generation, it will always be false
-        let should_skip_mask = semantic_tokens.dim(D::Minus1)? == 1
-            && semantic_tokens.i(0)?.to_scalar::<u32>()? == self.semantic_token_id as u32;
-        let codebook_embeds = if should_skip_mask {
-            codebook_emb
-        } else {
-            let emb_mask = semantic_tokens
-                .eq(self.semantic_token_id)?
-                .unsqueeze(D::Minus1)?
-                .to_dtype(codebook_emb.dtype())?;
-            codebook_emb.broadcast_mul(&emb_mask)?
-        };
+        let emb_mask = semantic_tokens
+            .eq(self.semantic_token_id)?
+            .unsqueeze(D::Minus1)?
+            .to_dtype(codebook_emb.dtype())?;
+        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
         let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 0)?;
         x.sum_keepdim(0)
     }
