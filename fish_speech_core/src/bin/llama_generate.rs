@@ -78,7 +78,7 @@ fn decode_one_token_ar(
     let slow_logits = logits.flatten_all()?;
     let repeat_window_size = 16;
 
-    let mut pad_prob = slow_logits
+    let pad_prob = slow_logits
         .i(pad_id as usize)?
         .to_dtype(DType::F32)?
         .to_scalar::<f32>()?;
