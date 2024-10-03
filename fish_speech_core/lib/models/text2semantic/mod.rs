@@ -257,7 +257,6 @@ impl Attention {
             .reshape((bsz, seqlen, self.n_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        // query_states.write_npy("q1_before_rope_rust.npy")?;
         let key_states = key_states
             .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -274,7 +273,6 @@ impl Attention {
         };
         let (query_states, key_states) =
             self.apply_rotary_emb_qkv(&query_states, &key_states, freqs_cis.0, freqs_cis.1)?;
-        // query_states.write_npy("q1_after_rope_rust.npy")?;
         let (key_states, value_states) = match &self.cache.kvs {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
@@ -294,7 +292,6 @@ impl Attention {
         let y =
             self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
-        // y.write_npy("y1_after_sdpa_rust.npy")?;
 
         self.wo.forward(&y)
     }
@@ -404,34 +401,42 @@ impl DualARTransformer {
     }
 
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        // Embed the initial semantic tokens
-        let token_codebooks = x.chunk(self.cfg.num_codebooks + 1, 0)?;
+        let semantic_tokens = x.i((0, ..))?;
+        let codebook_tokens = x.i((1.., ..))?;
         assert!(
-            token_codebooks.len() == self.cfg.num_codebooks + 1,
+            x.dim(D::Minus2)? == self.cfg.num_codebooks + 1,
             "Input tokens must have num_codebooks + 1 codebooks!"
         );
-        let semantic_tokens = &token_codebooks[0];
+        // Embed semantic tokens, re-add batch dim if single-batched
+        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?;
+        let semantic_embeds = match semantic_embeds.rank() {
+            2 => semantic_embeds.unsqueeze(0)?,
+            _ => semantic_embeds,
+        };
 
-        let mut vocab_embeds: Vec<Tensor> = vec![self.embeddings.forward(semantic_tokens)?];
-
-        for i in 0..(self.cfg.num_codebooks) {
-            let shifted_indices = &token_codebooks[i + 1] + (i * self.cfg.codebook_size) as f64;
-            let emb = self.codebook_embeddings.forward(&shifted_indices?)?;
-            // Zero out tokens where the semantic token is not the designated ID
-            let emb_mask = &token_codebooks[0]
-                .eq(self.semantic_token_id)?
-                .unsqueeze(D::Minus1)?
-                .to_dtype(emb.dtype())?;
-            let emb = emb.broadcast_mul(emb_mask)?;
-            vocab_embeds.push(emb)
-        }
-        let x = Tensor::stack(&vocab_embeds, 3)?;
-        x.sum(3)
+        // Offset the ranges for each codebook so they don't overlap
+        let codebook_tokens_shifted = codebook_tokens.broadcast_add(
+            &Tensor::arange_step(
+                0 as u32,
+                (self.cfg.num_codebooks * self.cfg.codebook_size) as u32,
+                self.cfg.codebook_size as u32,
+                x.device(),
+            )?
+            .unsqueeze(1)?,
+        )?;
+        let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
+        let emb_mask = semantic_tokens
+            .eq(self.semantic_token_id)?
+            .unsqueeze(D::Minus1)?
+            .to_dtype(codebook_emb.dtype())?;
+        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
+        let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 0)?;
+        x.sum_keepdim(0)
     }
 
     /// Returns (logits, hidden_states)
     pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
-        let (__size, seq_len) = inp.dims2()?;
+        let seq_len = inp.dim(1)?;
         let mut x = self.embed(inp)?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck

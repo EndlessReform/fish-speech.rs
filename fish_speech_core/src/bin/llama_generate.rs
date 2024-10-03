@@ -8,6 +8,7 @@ use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use fish_speech_core::models::vqgan::config::WhichModel;
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::Rng;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
@@ -41,6 +42,28 @@ fn apply_rep_pen(
     }
 }
 
+/// Extremely stripped-down softmax for two tokens
+fn softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: u32) -> u32 {
+    // Compute softmax
+    let exp_pad = (pad_prob - pad_prob.max(eos_prob)).exp();
+    let exp_eos = (eos_prob - pad_prob.max(eos_prob)).exp();
+    let sum = exp_pad + exp_eos;
+
+    let softmax_pad = exp_pad / sum;
+    // let softmax_eos = exp_eos / sum;
+
+    // Generate a random number
+    let mut rng = rand::thread_rng();
+    let rand_val: f32 = rng.gen(); // Generates a float between 0.0 and 1.0
+
+    // Sample according to softmax probabilities
+    if rand_val < softmax_pad {
+        pad_id // pad_id
+    } else {
+        eos_id // im_end_id
+    }
+}
+
 fn decode_one_token_ar(
     model: &mut DualARTransformer,
     fast_logits_processor: &mut LogitsProcessor,
@@ -55,7 +78,7 @@ fn decode_one_token_ar(
     let slow_logits = logits.flatten_all()?;
     let repeat_window_size = 16;
 
-    let mut pad_prob = slow_logits
+    let pad_prob = slow_logits
         .i(pad_id as usize)?
         .to_dtype(DType::F32)?
         .to_scalar::<f32>()?;
@@ -64,16 +87,7 @@ fn decode_one_token_ar(
         .to_dtype(DType::F32)?
         .to_scalar::<f32>()?;
 
-    if previous_tokens.is_some() {
-        pad_prob /= sampling_args.repetition_penalty;
-    }
-    // Greedy argmax sampling intended for semantic, per maintainers:
-    // https://github.com/fishaudio/fish-speech/issues/567#issuecomment-2360029630
-    let semantic_token = if pad_prob >= eos_prob {
-        pad_id
-    } else {
-        im_end_id
-    };
+    let semantic_token = softmax_sample(pad_prob, eos_prob, pad_id, im_end_id);
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 
@@ -113,9 +127,10 @@ fn generate(
 ) -> Result<Tensor> {
     let sampling = match sampling_args.temp {
         0.0 => Sampling::ArgMax,
-        temp => Sampling::TopP {
+        temp => Sampling::TopKThenTopP {
             temperature: temp,
             p: sampling_args.top_p,
+            k: sampling_args.top_k,
         },
     };
     let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
@@ -176,9 +191,10 @@ fn generate(
     let dt = start_decode.elapsed();
     let out_len = previous_tokens.dim(1)? as f64;
     println!(
-        "{} tokens generated ({:.2} tokens/s, RTF: {:.3})",
+        "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
         out_len / dt.as_secs_f64(),
+        (dt.as_secs_f64() * 1e3) / out_len,
         (out_len / 43.07) / dt.as_secs_f64()
     );
     previous_tokens.i((1.., ..))
@@ -193,6 +209,7 @@ fn generate_long(
     let sampling_args = SamplingArgs {
         temp: args.temp,
         top_p: args.top_p,
+        top_k: args.top_k,
         repetition_penalty: args.repetition_penalty,
     };
 
@@ -235,7 +252,7 @@ fn generate_long(
         &sampling_args,
     )?;
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
-    res.write_npy(args.out_path.canonicalize()?)?;
+    res.write_npy(&args.out_path)?;
 
     Ok(())
 }
@@ -243,6 +260,7 @@ fn generate_long(
 struct SamplingArgs {
     pub temp: f64,
     pub top_p: f64,
+    pub top_k: usize,
     pub repetition_penalty: f32,
 }
 
@@ -282,6 +300,10 @@ struct Args {
     /// Top-p sampling parameter
     #[arg(long, default_value_t = 0.7)]
     top_p: f64,
+
+    /// Top-k sampling parameter. Set high by default
+    #[arg(long, default_value_t = 256)]
+    top_k: usize,
 
     /// Penalty for repetition
     #[arg(long, default_value_t = 1.2)]
