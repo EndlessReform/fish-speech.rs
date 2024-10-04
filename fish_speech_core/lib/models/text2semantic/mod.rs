@@ -2,7 +2,8 @@ pub mod utils;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
+    embedding, kv_cache::KvCache, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module,
+    RmsNorm, VarBuilder,
 };
 use candle_transformers::utils::repeat_kv;
 use serde::Deserialize;
@@ -173,7 +174,7 @@ pub struct Attention {
     dim: usize,
     wqkv: Linear,
     wo: Linear,
-    cache: Cache,
+    cache: KvCache,
 }
 
 impl Attention {
@@ -183,7 +184,7 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let cache = Cache::new()?;
+        let cache = KvCache::new(2, 1024);
 
         Ok(Self {
             n_head: config.n_head,
@@ -255,33 +256,32 @@ impl Attention {
 
         let query_states = query_states
             .reshape((bsz, seqlen, self.n_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let key_states = key_states
             .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let value_states = value_states
             .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
-        // Logic copied from phi3.rs
-        let _seqlen_offset = match &self.cache.kvs {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(2)?,
-        };
-        let (query_states, key_states) =
-            self.apply_rotary_emb_qkv(&query_states, &key_states, freqs_cis.0, freqs_cis.1)?;
-        let (key_states, value_states) = match &self.cache.kvs {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (key_states, value_states)
-            }
-        };
-        self.cache.kvs = Some((key_states.clone(), value_states.clone()));
+        let (query_states, key_states) = self.apply_rotary_emb_qkv(
+            &query_states.contiguous()?,
+            &key_states.contiguous()?,
+            freqs_cis.0,
+            freqs_cis.1,
+        )?;
+        // let (key_states, value_states) = match &self.cache.kvs {
+        //     None => (key_states, value_states),
+        //     Some((prev_k, prev_v)) => {
+        //         let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
+        //         let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+        //         (key_states, value_states)
+        //     }
+        // };
+        let (key_states, value_states) = self
+            .cache
+            .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
+        // self.cache.kvs = Some((key_states.clone(), value_states.clone()));
 
         // Repeat KV cache
         let key_states = repeat_kv(key_states, self.n_head / self.n_local_heads)?.contiguous()?;
@@ -297,7 +297,7 @@ impl Attention {
     }
 
     pub fn clear_cache(&mut self) {
-        self.cache.kvs = None;
+        self.cache.reset();
     }
 }
 
