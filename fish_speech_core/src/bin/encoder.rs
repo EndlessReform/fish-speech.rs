@@ -6,7 +6,8 @@ use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
 use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
 use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -31,6 +32,11 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Attempt to canonicalize the path to avoid issues with relative paths and separators.
+    let checkpoint_path =
+        fs::canonicalize(&args.checkpoint).unwrap_or_else(|_| args.checkpoint.clone());
+
+    println!("Using checkpoint path: {:?}", checkpoint_path);
     println!("Processing in-place reconstruction of {:?}", args.src_audio);
     println!(
         "Warning: Loading precomputed audio for debugging. Please don't use this for production"
@@ -70,10 +76,13 @@ fn main() -> Result<()> {
     };
 
     println!("Using device {:?}", device);
-    let model_full_path = args.checkpoint.join(model_path);
+
+    let full_model_path = checkpoint_path.join(model_path);
+    println!("Full model path: {:?}", full_model_path);
+
     let vb = match args.fish_version {
-        WhichModel::Fish1_2 => VarBuilder::from_pth(&model_full_path, dtype, &device)?,
-        _ => unsafe { VarBuilder::from_mmaped_safetensors(&[model_full_path], dtype, &device)? },
+        WhichModel::Fish1_2 => VarBuilder::from_pth(&full_model_path, dtype, &device)?,
+        _ => unsafe { VarBuilder::from_mmaped_safetensors(&[full_model_path], dtype, &device)? },
     };
     let encoder = FireflyEncoder::load(vb, &config, &args.fish_version)?;
     println!("Model {:?} loaded", args.fish_version);
