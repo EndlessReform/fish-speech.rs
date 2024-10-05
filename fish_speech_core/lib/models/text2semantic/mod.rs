@@ -11,6 +11,8 @@ use serde_json;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
@@ -175,16 +177,17 @@ pub struct Attention {
     wqkv: Linear,
     wo: Linear,
     cache: KvCache,
+    is_fast: bool,
 }
 
 impl Attention {
-    pub fn load(vb: &VarBuilder, config: &BaseModelArgs) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, config: &BaseModelArgs, is_fast: bool) -> Result<Self> {
         let total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim;
         // KQV for all heads, but in a batch
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let cache = KvCache::new(2, 1024);
+        let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
 
         Ok(Self {
             n_head: config.n_head,
@@ -195,6 +198,7 @@ impl Attention {
             wo,
             // TODO configure this, improve cache handling
             cache,
+            is_fast,
         })
     }
 
@@ -270,6 +274,7 @@ impl Attention {
             freqs_cis.0,
             freqs_cis.1,
         )?;
+
         // let (key_states, value_states) = match &self.cache.kvs {
         //     None => (key_states, value_states),
         //     Some((prev_k, prev_v)) => {
@@ -284,10 +289,10 @@ impl Attention {
         // self.cache.kvs = Some((key_states.clone(), value_states.clone()));
 
         // Repeat KV cache
-        let key_states = repeat_kv(key_states, self.n_head / self.n_local_heads)?.contiguous()?;
-        let value_states =
-            repeat_kv(value_states, self.n_head / self.n_local_heads)?.contiguous()?;
+        let key_states = repeat_kv(key_states.contiguous()?, self.n_head / self.n_local_heads)?;
+        let value_states = repeat_kv(value_states.contiguous()?, self.n_head / self.n_local_heads)?;
 
+        // thread::sleep(Duration::from_micros(10));
         // TODO: Add optional flash attention
         let y =
             self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
@@ -309,8 +314,8 @@ pub struct TransformerBlock {
 }
 
 impl TransformerBlock {
-    pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs) -> Result<Self> {
-        let attention = Attention::load(&vb.pp("attention"), cfg)?;
+    pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs, is_fast: bool) -> Result<Self> {
+        let attention = Attention::load(&vb.pp("attention"), cfg, is_fast)?;
         let feed_forward = FeedForward::load(&vb.pp("feed_forward"), cfg)?;
         let ffn_norm = RmsNorm::new(vb.get(cfg.dim, "ffn_norm.weight")?, cfg.norm_eps);
         let attention_norm = RmsNorm::new(vb.get(cfg.dim, "attention_norm.weight")?, cfg.norm_eps);
@@ -364,7 +369,7 @@ impl DualARTransformer {
             cfg.dim,
         );
         let layers: Result<Vec<TransformerBlock>> = (0..cfg.n_layer)
-            .map(|l| TransformerBlock::load(&vb.pp(format!("layers.{}", l)), cfg))
+            .map(|l| TransformerBlock::load(&vb.pp(format!("layers.{}", l)), cfg, false))
             .collect();
         let layers = layers?;
         let norm = RmsNorm::new(vb.get(cfg.dim, "norm.weight")?, cfg.norm_eps);
@@ -374,7 +379,7 @@ impl DualARTransformer {
             cfg.dim,
         );
         let fast_layers: Result<Vec<TransformerBlock>> = (0..cfg.n_fast_layer)
-            .map(|l| TransformerBlock::load(&vb.pp(format!("fast_layers.{}", l)), cfg))
+            .map(|l| TransformerBlock::load(&vb.pp(format!("fast_layers.{}", l)), cfg, true))
             .collect();
         let fast_layers = fast_layers?;
         let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
