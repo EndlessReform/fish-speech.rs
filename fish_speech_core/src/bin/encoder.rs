@@ -21,7 +21,7 @@ struct Args {
     dest_audio: PathBuf,
 
     /// Path to the model checkpoint
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
+    #[arg(long, value_hint = ValueHint::DirPath, default_value = "checkpoints/fish-speech-1.4")]
     checkpoint: PathBuf,
 
     #[arg(long, default_value = "1.4")]
@@ -51,7 +51,6 @@ fn main() -> Result<()> {
         audio = audio.mean_keepdim(0)?;
     }
 
-
     let config = FireflyConfig::get_config_for(args.fish_version);
     // Add spurious batch dimension for consistency
     audio = torchaudio::functional::resample(&audio, sr, config.spec_transform.sample_rate as u32)?
@@ -71,17 +70,10 @@ fn main() -> Result<()> {
     };
 
     println!("Using device {:?}", device);
+    let model_full_path = args.checkpoint.join(model_path);
     let vb = match args.fish_version {
-        WhichModel::Fish1_2 => {
-            VarBuilder::from_pth(args.checkpoint.join(model_path), dtype, &device)?
-        }
-        _ => unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[args.checkpoint.join(model_path)],
-                dtype,
-                &device,
-            )?
-        },
+        WhichModel::Fish1_2 => VarBuilder::from_pth(&model_full_path, dtype, &device)?,
+        _ => unsafe { VarBuilder::from_mmaped_safetensors(&[model_full_path], dtype, &device)? },
     };
     let encoder = FireflyEncoder::load(vb, &config, &args.fish_version)?;
     println!("Model {:?} loaded", args.fish_version);

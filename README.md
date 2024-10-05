@@ -18,7 +18,15 @@ Note that we don't support the official `.pth` weights.
 
 ### System requirements
 
-Nvidia GPU or Apple Silicon are highly recommended. CPU inference is supported as a fallback, but it's pretty slow. Please raise an issue if you want CPU accelerated.
+This port is based on [Candle.rs](), so we only support:
+
+- Nvidia GPU
+- Apple Silicon
+- CPU
+
+CPU inference is supported as a fallback, but it's pretty slow. Please raise an issue if you want CPU accelerated.
+
+If you're using Windows, please follow the Windows guide for environment setup. It's a lot easier to get wrong than for Linux or Mac.
 
 ## Usage
 
