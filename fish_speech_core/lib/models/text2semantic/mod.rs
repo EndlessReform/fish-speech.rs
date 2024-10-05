@@ -288,11 +288,25 @@ impl Attention {
             .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
         // self.cache.kvs = Some((key_states.clone(), value_states.clone()));
 
-        // Repeat KV cache
-        let key_states = repeat_kv(key_states.contiguous()?, self.n_head / self.n_local_heads)?;
-        let value_states = repeat_kv(value_states.contiguous()?, self.n_head / self.n_local_heads)?;
-
         // thread::sleep(Duration::from_micros(10));
+        // Repeat KV cache
+        // let key_states = repeat_kv(key_states.contiguous()?, self.n_head / self.n_local_heads)?;
+        // Length changes after pulling
+        let kv_seqlen = key_states.dim(2)?;
+        let n_rep = self.n_head / self.n_local_heads;
+        // TODO: Consider whether there's a better way to do this with 2 copy2ds instead of ucopy
+        // https://github.com/huggingface/candle/pull/2043 got the duplication wrong but there might still be something there
+        let key_states = key_states
+            .unsqueeze(2)?
+            .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+            .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        let value_states = value_states
+            .unsqueeze(2)?
+            .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+            .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        // thread::sleep(Duration::from_micros(10));
+        // let value_states = repeat_kv(value_states.contiguous()?, self.n_head / self.n_local_heads)?;
+
         // TODO: Add optional flash attention
         let y =
             self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;

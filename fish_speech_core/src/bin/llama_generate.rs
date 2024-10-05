@@ -194,7 +194,7 @@ fn generate(
         "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
         out_len / dt.as_secs_f64(),
-        (dt.as_secs_f64() * 1e3) / out_len,
+        (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
         (out_len / 43.07) / dt.as_secs_f64()
     );
     previous_tokens.i((1.., ..))
