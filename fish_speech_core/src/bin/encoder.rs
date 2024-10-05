@@ -7,7 +7,7 @@ use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramC
 use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
 use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -77,7 +77,6 @@ fn main() -> Result<()> {
     println!("Using device {:?}", device);
 
     let full_model_path = checkpoint_path.join(model_path);
-    println!("Full model path: {:?}", full_model_path);
 
     let vb = match args.fish_version {
         WhichModel::Fish1_2 => VarBuilder::from_pth(&full_model_path, dtype, &device)?,
