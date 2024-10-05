@@ -33,8 +33,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Attempt to canonicalize the path to avoid issues with relative paths and separators.
-    let checkpoint_path =
-        fs::canonicalize(&args.checkpoint).unwrap_or_else(|_| args.checkpoint.clone());
+    let checkpoint_path = fs::canonicalize(&args.checkpoint).unwrap();
 
     println!("Using checkpoint path: {:?}", checkpoint_path);
     println!("Processing in-place reconstruction of {:?}", args.src_audio);
