@@ -4,7 +4,7 @@ use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
-use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
+use fish_speech_core::models::text2semantic::utils::{encode::encode_tokens, RepPenProcessor};
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use fish_speech_core::models::vqgan::config::WhichModel;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -27,20 +27,6 @@ use tokenizers::Tokenizer;
 //     println!("Top logprobs: {:?}", &lp[..5]);
 //     Ok(())
 // }
-
-fn apply_rep_pen(
-    logits: &Tensor,
-    tokens: &[u32],
-    rep_pen: f32,
-    repeat_last_n: usize,
-) -> Result<Tensor> {
-    if rep_pen == 1. {
-        Ok(logits.clone())
-    } else {
-        let start_at = tokens.len().saturating_sub(repeat_last_n);
-        apply_repeat_penalty(&logits, rep_pen, &tokens[start_at..])
-    }
-}
 
 /// Extremely stripped-down softmax for two tokens
 fn softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: u32) -> u32 {
@@ -71,12 +57,11 @@ fn decode_one_token_ar(
     input_pos: usize,
     im_end_id: u32,
     pad_id: u32,
-    previous_tokens: Option<&Tensor>,
-    sampling_args: &SamplingArgs,
-) -> Result<Tensor> {
+    previous_token: Option<Vec<u32>>,
+    rep_pens: &mut Vec<RepPenProcessor>,
+) -> Result<(Vec<u32>, Tensor)> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
-    let repeat_window_size = 16;
 
     let pad_prob = slow_logits
         .i(pad_id as usize)?
@@ -93,27 +78,23 @@ fn decode_one_token_ar(
 
     let mut x = hidden_states;
     for codebook_idx in 0..model.cfg.num_codebooks {
-        // TODO: Figure out what the heck input_pos is
         let logits = model
             .forward_generate_fast(&x, codebook_idx)?
             .flatten_all()?;
 
-        let logits_adj = match previous_tokens {
-            Some(ctxt) => apply_rep_pen(
-                &logits,
-                &ctxt.i((codebook_idx + 1, ..))?.to_vec1()?,
-                sampling_args.repetition_penalty,
-                repeat_window_size,
-            )?,
-            None => logits,
+        let logits_adj = match &previous_token {
+            None => logits.clone(),
+            Some(t) => rep_pens[codebook_idx].apply(&logits, t[codebook_idx + 1] as usize)?,
         };
         let a = fast_logits_processor.sample(&logits_adj.flatten_all()?)?;
-        // println!("Codebook shape: {:?}", prev_codes[codebook_idx + 1].shape());
         let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
         x = model.fast_embeddings.forward(&a_tensor)?.unsqueeze(0)?;
         codebooks.push(a);
     }
-    Tensor::from_vec(codebooks, model.cfg.num_codebooks + 1, x.device())?.unsqueeze(D::Minus1)
+    let codes_tensor =
+        Tensor::from_vec(codebooks.clone(), model.cfg.num_codebooks + 1, x.device())?
+            .unsqueeze(D::Minus1)?;
+    Ok((codebooks, codes_tensor))
 }
 
 /// Takes a conditioning sequence as input and generates as many tokens as requested
@@ -134,8 +115,21 @@ fn generate(
         },
     };
     let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
+    let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
+        .map(|_| {
+            RepPenProcessor::new(
+                model.cfg.codebook_size,
+                16,
+                sampling_args.repetition_penalty,
+                model.fast_embeddings.embeddings().dtype(),
+                model.fast_embeddings.embeddings().device(),
+            )
+        })
+        .collect();
+    let mut fast_rep_pens = maybe_fast_rep_pens?;
+
     let start_pp = Instant::now();
-    let mut cur_token = decode_one_token_ar(
+    let (mut previous_token, mut cur_token) = decode_one_token_ar(
         model,
         &mut fast_logits_processor,
         prompt,
@@ -143,7 +137,7 @@ fn generate(
         im_end_id,
         pad_id,
         None,
-        &sampling_args,
+        &mut fast_rep_pens,
     )?;
     let dt = start_pp.elapsed();
     let mut input_pos = prompt.dim(D::Minus1)?;
@@ -167,26 +161,25 @@ fn generate(
 
     let start_decode = Instant::now();
     for i in 1..max_new_tokens {
-        let next_token = decode_one_token_ar(
+        let (next_indices, next_token) = decode_one_token_ar(
             model,
             &mut fast_logits_processor,
             &cur_token,
             input_pos,
             im_end_id,
             pad_id,
-            Some(&previous_tokens),
-            sampling_args,
+            Some(previous_token),
+            &mut fast_rep_pens,
         )?;
         previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
-        if let Some(semantic_token) = next_token.i((0, 0))?.to_vec0::<u32>().ok() {
-            if semantic_token == im_end_id {
-                break;
-            }
+        if next_indices[0] == im_end_id {
+            break;
         }
         input_pos += 1;
         cur_token = next_token;
+        previous_token = next_indices;
     }
     let dt = start_decode.elapsed();
     let out_len = previous_tokens.dim(1)? as f64;

@@ -350,7 +350,7 @@ impl TransformerBlock {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.attention_norm.forward(x)?;
-        let x = (self.attention.forward(&x, mask, freqs_cis)? + residual)?;
+        let x = (residual + self.attention.forward(&x, mask, freqs_cis)?)?;
         let residual = &x;
         let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
         x
