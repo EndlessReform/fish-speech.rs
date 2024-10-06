@@ -57,7 +57,7 @@ fn decode_one_token_ar(
     im_end_id: u32,
     pad_id: u32,
     previous_token: Option<Vec<u32>>,
-    rep_pens: &mut Vec<RepPenProcessor>,
+    rep_pens: &mut [RepPenProcessor],
 ) -> Result<(Vec<u32>, Tensor)> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
@@ -206,11 +206,11 @@ fn generate_long(
     };
 
     let conditioning_prompts =
-        load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone(), &device)?;
+        load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone(), device)?;
 
     let encoded_prompts: Result<Tensor> = conditioning_prompts
         .iter()
-        .map(|(t, c)| encode_tokens(&tokenizer, &t, &device, Some(c), model.cfg.num_codebooks))
+        .map(|(t, c)| encode_tokens(tokenizer, t, device, Some(c), model.cfg.num_codebooks))
         .try_fold(
             Tensor::from_slice(
                 &(vec![] as Vec<u32>),
@@ -223,7 +223,7 @@ fn generate_long(
     let encoded = vec![encode_tokens(
         &tokenizer,
         &args.text,
-        &device,
+        device,
         None,
         model.cfg.num_codebooks,
     )?];
@@ -258,7 +258,7 @@ struct SamplingArgs {
 }
 
 fn load_prompt_texts(
-    prompt_tokens: &Vec<PathBuf>,
+    prompt_tokens: &[PathBuf],
     prompt_texts: Vec<String>,
     device: &Device,
 ) -> anyhow::Result<Vec<(String, Tensor)>> {
@@ -270,13 +270,10 @@ fn load_prompt_texts(
         )))?
     }
 
-    let codes: Result<Vec<Tensor>> = prompt_tokens
-        .iter()
-        .map(|path| Tensor::read_npy(path))
-        .collect();
+    let codes: Result<Vec<Tensor>> = prompt_tokens.iter().map(Tensor::read_npy).collect();
     let codes: Result<Vec<Tensor>> = codes?.into_iter().map(|c| c.to_device(device)).collect();
 
-    Ok(prompt_texts.into_iter().zip(codes?.into_iter()).collect())
+    Ok(prompt_texts.into_iter().zip(codes?).collect())
 }
 
 #[derive(Parser, Debug)]
@@ -351,7 +348,7 @@ fn main() -> anyhow::Result<()> {
     let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
     // TODO: Figure out why BF16 is breaking on Metal
-    #[cfg(any(feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     let dtype = DType::BF16;
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;

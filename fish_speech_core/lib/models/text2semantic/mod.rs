@@ -10,8 +10,6 @@ use serde_json;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-// use std::thread;
-// use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
@@ -127,7 +125,7 @@ fn precompute_freqs_cis(
     let n_elem = config.dim / config.n_head;
     let theta: Vec<_> = (0..n_elem)
         .step_by(2)
-        .map(|i| 1f32 / (config.rope_base as f32).powf(i as f32 / n_elem as f32))
+        .map(|i| 1f32 / config.rope_base.powf(i as f32 / n_elem as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
     let idx_theta = Tensor::arange(0, config.max_seq_len as u32, device)?
@@ -194,8 +192,8 @@ impl Attention {
         cos: &Tensor,
         sin: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        let q_embed = candle_nn::rotary_emb::rope_i(&q, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope_i(&k, &cos, &sin)?;
+        let q_embed = candle_nn::rotary_emb::rope_i(q, cos, sin)?;
+        let k_embed = candle_nn::rotary_emb::rope_i(k, cos, sin)?;
         Ok((q_embed, k_embed))
     }
 
@@ -260,22 +258,10 @@ impl Attention {
             freqs_cis.1,
         )?;
 
-        // let (key_states, value_states) = match &self.cache.kvs {
-        //     None => (key_states, value_states),
-        //     Some((prev_k, prev_v)) => {
-        //         let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-        //         let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-        //         (key_states, value_states)
-        //     }
-        // };
         let (key_states, value_states) = self
             .cache
             .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
-        // self.cache.kvs = Some((key_states.clone(), value_states.clone()));
 
-        // thread::sleep(Duration::from_micros(10));
-        // Repeat KV cache
-        // let key_states = repeat_kv(key_states.contiguous()?, self.n_head / self.n_local_heads)?;
         // Length changes after pulling
         let kv_seqlen = key_states.dim(2)?;
         let n_rep = self.n_head / self.n_local_heads;
@@ -289,8 +275,6 @@ impl Attention {
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
-        // thread::sleep(Duration::from_micros(10));
-        // let value_states = repeat_kv(value_states.contiguous()?, self.n_head / self.n_local_heads)?;
 
         // TODO: Add optional flash attention
         let y =
@@ -337,8 +321,7 @@ impl TransformerBlock {
         let x = self.attention_norm.forward(x)?;
         let x = (residual + self.attention.forward(&x, mask, freqs_cis)?)?;
         let residual = &x;
-        let x = residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?);
-        x
+        residual + self.feed_forward.forward(&self.ffn_norm.forward(&x)?)
     }
 }
 
@@ -421,7 +404,7 @@ impl DualARTransformer {
         // Offset the ranges for each codebook so they don't overlap
         let codebook_tokens_shifted = codebook_tokens.broadcast_add(
             &Tensor::arange_step(
-                0 as u32,
+                0,
                 (self.cfg.num_codebooks * self.cfg.codebook_size) as u32,
                 self.cfg.codebook_size as u32,
                 x.device(),
@@ -448,7 +431,7 @@ impl DualARTransformer {
         let mask = get_mask(seq_len, x.device())?;
 
         let (cos_full, sin_full) = &self.freqs_cis;
-        for (_, layer) in self.layers.iter_mut().enumerate() {
+        for layer in self.layers.iter_mut() {
             x = layer.forward(
                 &x,
                 &mask,

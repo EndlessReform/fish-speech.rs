@@ -57,8 +57,7 @@ impl RepPenProcessor {
                     *count -= 1;
                     if *count == 0 {
                         self.tokens_seen.remove(&dropped_token);
-                        self.penalty_mask
-                            .slice_set(&self.one, 0, dropped_token as usize)?;
+                        self.penalty_mask.slice_set(&self.one, 0, dropped_token)?;
                     }
                 }
             }

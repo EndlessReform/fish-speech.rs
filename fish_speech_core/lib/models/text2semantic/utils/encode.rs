@@ -23,7 +23,7 @@ pub fn encode_tokens(
     let zeros = Tensor::zeros((num_codebooks, new_tokens.len()), DType::U32, device)?;
     let prompt = Tensor::cat(&[tokens, zeros], 0)?;
 
-    if let None = prompt_tokens {
+    if prompt_tokens.is_none() {
         return Ok(prompt);
     }
     let prompt_tokens = prompt_tokens.unwrap().to_dtype(DType::U32)?;
