@@ -5,14 +5,13 @@ use candle_nn::{
     embedding, kv_cache::KvCache, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module,
     RmsNorm, VarBuilder,
 };
-use candle_transformers::utils::repeat_kv;
 use serde::Deserialize;
 use serde_json;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
+// use std::thread;
+// use std::time::Duration;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
@@ -119,18 +118,6 @@ impl Module for FeedForward {
     }
 }
 
-pub struct Cache {
-    /// TODO: Does this require Arc<Mutex>>?
-    kvs: Option<(Tensor, Tensor)>,
-}
-
-impl Cache {
-    pub fn new() -> Result<Self> {
-        // Precompute freqs_cis
-        Ok(Self { kvs: None })
-    }
-}
-
 /// Returns (cos, sin) for the full possible batch size
 fn precompute_freqs_cis(
     config: &BaseModelArgs,
@@ -177,7 +164,6 @@ pub struct Attention {
     wqkv: Linear,
     wo: Linear,
     cache: KvCache,
-    is_fast: bool,
 }
 
 impl Attention {
@@ -198,7 +184,6 @@ impl Attention {
             wo,
             // TODO configure this, improve cache handling
             cache,
-            is_fast,
         })
     }
 
@@ -510,6 +495,12 @@ impl DualARTransformer {
 
     pub fn clear_fast_layer_caches(&mut self) {
         for layer in self.fast_layers.iter_mut() {
+            layer.attention.clear_cache();
+        }
+    }
+
+    pub fn clear_slow_layer_caches(&mut self) {
+        for layer in self.layers.iter_mut() {
             layer.attention.clear_cache();
         }
     }

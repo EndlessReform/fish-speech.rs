@@ -2,7 +2,6 @@ use anyhow::Error;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::utils::apply_repeat_penalty;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::{encode::encode_tokens, RepPenProcessor};
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
@@ -244,6 +243,7 @@ fn generate_long(
         pad_id,
         &sampling_args,
     )?;
+    model.clear_slow_layer_caches();
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
     res.write_npy(&args.out_path)?;
 
