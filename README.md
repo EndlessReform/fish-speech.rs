@@ -64,8 +64,9 @@ For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.
 > Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact. 
 
 ```bash
-# Cache build directory
-# Leave your computer, go touch grass, have a cup of tea, etc.
+# Cache the Flash Attention build
+# Leave your computer, have a cup of tea, go touch grass, etc.
+mkdir ~/.candle
 CANDLE_FLASH_ATTN_BUILD_DIR=$HOME/.candle cargo build --release --features flash-attn --bin llama_generate
 
 # Then run with flash-attn flag
