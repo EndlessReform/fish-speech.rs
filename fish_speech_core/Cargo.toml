@@ -10,11 +10,14 @@ path = "lib/lib.rs"
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+flash-attn = ["cuda", "dep:candle-flash-attn"]
+
 
 [dependencies]
 anyhow = "1.0.86"
 byteorder = "1.5.0"
 candle-core = "0.7.1"
+candle-flash-attn = { version = "0.7.1", optional = true }
 candle-nn = "0.7.1"
 candle-transformers = "0.7.1"
 clap = { version = "4.5.16", features = ["derive"] }

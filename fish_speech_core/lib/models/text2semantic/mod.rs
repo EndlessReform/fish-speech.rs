@@ -197,22 +197,31 @@ impl Attention {
         Ok((q_embed, k_embed))
     }
 
+    #[cfg(feature = "flash-attn")]
+    fn scaled_dot_product_attention(
+        query: &Tensor,
+        key: &Tensor,
+        value: &Tensor,
+        softmax_scale: f32,
+        attn_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        candle_flash_attn::flash_attn(query, key, value, softmax_scale, attn_mask.is_some())
+    }
+
     /// Standard inefficient SDPA
     fn scaled_dot_product_attention(
         &self,
         query: &Tensor,
         key: &Tensor,
         value: &Tensor,
-        attn_mask: &Tensor,
+        softmax_scale: f32,
+        attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let scale_factor = (self.head_dim as f64).sqrt();
-        let seqlen = query.dim(D::Minus2)?;
-
-        let attn_weight = query.matmul(&(key.t()? / scale_factor)?)?;
+        let attn_weight = query.matmul(&(key.t()? * softmax_scale as f64)?)?;
         // Masking w/ KV cache is redundant
-        let attn_weight = match seqlen {
-            1 => attn_weight,
-            _ => masked_fill(
+        let attn_weight = match attn_mask {
+            None => attn_weight,
+            Some(attn_mask) => masked_fill(
                 &attn_weight,
                 &attn_mask.broadcast_left((1, self.n_head))?,
                 f32::NEG_INFINITY,
@@ -276,9 +285,14 @@ impl Attention {
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
 
-        // TODO: Add optional flash attention
-        let y =
-            self.scaled_dot_product_attention(&query_states, &key_states, &value_states, mask)?;
+        let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
+        let y = self.scaled_dot_product_attention(
+            &query_states,
+            &key_states,
+            &value_states,
+            scale_factor,
+            if seqlen > 1 { Some(&mask) } else { None },
+        )?;
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
 
         self.wo.forward(&y)
