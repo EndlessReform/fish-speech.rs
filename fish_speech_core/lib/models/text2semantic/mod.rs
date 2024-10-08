@@ -164,6 +164,17 @@ pub struct Attention {
     cache: KvCache,
 }
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    query: &Tensor,
+    key: &Tensor,
+    value: &Tensor,
+    softmax_scale: f32,
+    attn_mask: Option<&Tensor>,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(query, key, value, softmax_scale, attn_mask.is_some())
+}
+
 impl Attention {
     pub fn load(vb: &VarBuilder, config: &BaseModelArgs, is_fast: bool) -> Result<Self> {
         let total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim;
@@ -195,17 +206,6 @@ impl Attention {
         let q_embed = candle_nn::rotary_emb::rope_i(q, cos, sin)?;
         let k_embed = candle_nn::rotary_emb::rope_i(k, cos, sin)?;
         Ok((q_embed, k_embed))
-    }
-
-    #[cfg(feature = "flash-attn")]
-    fn scaled_dot_product_attention(
-        query: &Tensor,
-        key: &Tensor,
-        value: &Tensor,
-        softmax_scale: f32,
-        attn_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
-        candle_flash_attn::flash_attn(query, key, value, softmax_scale, attn_mask.is_some())
     }
 
     /// Standard inefficient SDPA
@@ -286,13 +286,24 @@ impl Attention {
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
+        let mask = if seqlen > 1 { Some(mask) } else { None };
+        #[cfg(feature = "flash-attn")]
+        let y = {
+            let q = query_states.transpose(1, 2)?;
+            let k = key_states.transpose(1, 2)?;
+            let v = value_states.transpose(1, 2)?;
+            flash_attn(&q, &k, &v, scale_factor, mask)?.transpose(1, 2)?
+        };
+
+        #[cfg(not(feature = "flash-attn"))]
         let y = self.scaled_dot_product_attention(
             &query_states,
             &key_states,
             &value_states,
             scale_factor,
-            if seqlen > 1 { Some(&mask) } else { None },
+            mask,
         )?;
+
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
 
         self.wo.forward(&y)
