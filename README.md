@@ -55,6 +55,28 @@ For Fish 1.2, you'll have to specify version and checkpoint explicitly:
 cargo run --release --features metal --bin llama_generate -- --text "That is not dead which can eternal lie, and with strange aeons even death may die." --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
 ```
 
+For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.14135) support. 
+
+> [!WARNING]
+> 
+> The candle-flash-attention dependency [can take more than 10 minutes to compile](https://github.com/huggingface/candle/issues/2275) even on a good CPU, and can require more than 16 GB of memory! You have been warned. 
+> 
+> Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact. 
+
+```bash
+# Cache the Flash Attention build
+# Leave your computer, have a cup of tea, go touch grass, etc.
+mkdir ~/.candle
+CANDLE_FLASH_ATTN_BUILD_DIR=$HOME/.candle cargo build --release --features flash-attn --bin llama_generate
+
+# Then run with flash-attn flag
+cargo run --release --features flash-attn --bin llama_generate -- \
+  --text "That is not dead which can eternal lie, and with strange aeons even death may die." \
+  --prompt-text "When I heard the release demo, I was shocked, angered, and in disbelief that Mr. Altman would pursue a voice that sounded so eerily similar to mine that my closest friends and news outlets could not tell the difference." \
+  --prompt-tokens fake.npy
+```
+
+
 ### Decode tokens to WAV
 
 For Fish 1.4 (default):
