@@ -303,6 +303,9 @@ impl Attention {
             scale_factor,
             mask,
         )?;
+        drop(query_states);
+        drop(key_states);
+        drop(value_states);
 
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
 
