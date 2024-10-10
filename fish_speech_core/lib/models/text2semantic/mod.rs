@@ -161,7 +161,8 @@ pub struct Attention {
     dim: usize,
     wqkv: Linear,
     wo: Linear,
-    cache: KvCache,
+    // cache: KvCache,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -182,7 +183,8 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
+        // let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
+        let kv_cache = None;
 
         Ok(Self {
             n_head: config.n_head,
@@ -192,7 +194,7 @@ impl Attention {
             wqkv,
             wo,
             // TODO configure this, improve cache handling
-            cache,
+            kv_cache,
         })
     }
 
@@ -266,11 +268,28 @@ impl Attention {
             freqs_cis.0,
             freqs_cis.1,
         )?;
+        // println!("KEY individual after RoPE: {:?}", key_states.layout());
 
-        let (key_states, value_states) = self
-            .cache
-            .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
+        // let (key_states, value_states) = self
+        //     .cache
+        //     .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
+        let (key_states, value_states) = match &self.kv_cache {
+            None => (key_states, value_states.contiguous()?),
+            Some((prev_k, prev_v)) => {
+                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
+                let value_states = Tensor::cat(&[prev_v, &value_states.contiguous()?], 2)?;
+                (key_states, value_states)
+            }
+        };
+        self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
+        // println!(
+        //     "AFTER CAT:\nKEY: {:?} (contiguous: {})\nVALUE: {:?} (contiguous: {})",
+        //     key_states.layout(),
+        //     key_states.is_contiguous(),
+        //     value_states.layout(),
+        //     value_states.is_contiguous()
+        // );
         // Length changes after pulling
         let kv_seqlen = key_states.dim(2)?;
         let n_rep = self.n_head / self.n_local_heads;
@@ -313,7 +332,8 @@ impl Attention {
     }
 
     pub fn clear_cache(&mut self) {
-        self.cache.reset();
+        // self.cache.reset();
+        self.kv_cache = None;
     }
 }
 
