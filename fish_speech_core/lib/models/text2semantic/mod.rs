@@ -1,6 +1,7 @@
 pub mod utils;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_gqa_ops::ops::repeat_kv;
 use candle_nn::{
     embedding, kv_cache::KvCache, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module,
     RmsNorm, VarBuilder,
@@ -295,14 +296,21 @@ impl Attention {
         let n_rep = self.n_head / self.n_local_heads;
         // TODO: Consider whether there's a better way to do this with 2 copy2ds instead of ucopy
         // https://github.com/huggingface/candle/pull/2043 got the duplication wrong but there might still be something there
+        #[cfg(not(feature = "cuda"))]
         let key_states = key_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        #[cfg(feature = "cuda")]
+        let key_states = repeat_kv(&key_states, n_rep)?;
+
+        #[cfg(not(feature = "cuda"))]
         let value_states = value_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        #[cfg(feature = "cuda")]
+        let value_states = repeat_kv(&value_states, n_rep)?;
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
         let mask = if seqlen > 1 { Some(mask) } else { None };

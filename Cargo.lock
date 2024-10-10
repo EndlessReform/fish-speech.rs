@@ -222,9 +222,9 @@ checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 
 [[package]]
 name = "candle-core"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eefd88b58cb1641a6245bfc6aa79032da2fac39da7c3eec1a08da5f16a739a38"
+checksum = "7e1a39b963e261c58017edf2007e5b63425ad21538aaaf51fe23d1da41703701"
 dependencies = [
  "byteorder",
  "candle-kernels",
@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66bc10eecc80be2f7916525eb6aa20aa580c1a07ffacfef7183cfea964b92c6f"
+checksum = "ad01ec40011de94c0dee88563c6c16eb12eb6d212d176adeff53315c141e0bd1"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -258,19 +258,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-gqa-kernels"
+version = "0.1.0"
+source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=master#e2c802ca2e0fb3ed46be7df5d2bdbd389cee97ee"
+dependencies = [
+ "bindgen_cuda",
+]
+
+[[package]]
+name = "candle-gqa-ops"
+version = "0.1.0"
+source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=master#e2c802ca2e0fb3ed46be7df5d2bdbd389cee97ee"
+dependencies = [
+ "candle-core",
+ "candle-gqa-kernels",
+]
+
+[[package]]
 name = "candle-kernels"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88a66b755bdb5c3885647188d245e58787710012d8b20308a6e3a068c085630e"
+checksum = "539cbfbf2d1d68a6ed97115e579c77c98f8ed0cfe7edbc6d7d30d2ac0c9e3d50"
 dependencies = [
  "bindgen_cuda",
 ]
 
 [[package]]
 name = "candle-metal-kernels"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac8e8e2f3d525714c1a8931f0c52212e99c03d07aefd6c870c3be8b83d136e6d"
+checksum = "166a92826d615d98b205e346e52128fa0439f2ab3302587403fdc558b4219e19"
 dependencies = [
  "metal",
  "once_cell",
@@ -280,9 +297,9 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80a0c5302dd952d02987435bf27c8564d9f681095e69bbb851102a9d6898f70b"
+checksum = "898f8d21b8bdf559a1c8635e2db8386b2134015cd3003c18c1a30a22a67daec6"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -297,9 +314,9 @@ dependencies = [
 
 [[package]]
 name = "candle-transformers"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4faabe4a2993ecb312ab99b4b6b3f18304d4930d35f84585b8bb61b564e3bfb6"
+checksum = "06b8a130a8ac1d1e20696d89f7a52948902e037ad0eec085fceb77021007cfee"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -673,6 +690,7 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-flash-attn",
+ "candle-gqa-ops",
  "candle-nn",
  "candle-transformers",
  "clap",
@@ -1266,7 +1284,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -2945,7 +2963,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
