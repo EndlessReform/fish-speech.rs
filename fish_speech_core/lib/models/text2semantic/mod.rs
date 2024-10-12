@@ -1,10 +1,10 @@
 pub mod utils;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+#[cfg(feature = "cuda")]
 use candle_gqa_ops::ops::repeat_kv;
 use candle_nn::{
-    embedding, kv_cache::KvCache, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module,
-    RmsNorm, VarBuilder,
+    embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
 use serde::Deserialize;
 use serde_json;
@@ -162,7 +162,6 @@ pub struct Attention {
     dim: usize,
     wqkv: Linear,
     wo: Linear,
-    // cache: KvCache,
     kv_cache: Option<(Tensor, Tensor)>,
 }
 
@@ -269,11 +268,7 @@ impl Attention {
             freqs_cis.0,
             freqs_cis.1,
         )?;
-        // println!("KEY individual after RoPE: {:?}", key_states.layout());
 
-        // let (key_states, value_states) = self
-        //     .cache
-        //     .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states.contiguous()?),
             Some((prev_k, prev_v)) => {
@@ -284,18 +279,10 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        // println!(
-        //     "AFTER CAT:\nKEY: {:?} (contiguous: {})\nVALUE: {:?} (contiguous: {})",
-        //     key_states.layout(),
-        //     key_states.is_contiguous(),
-        //     value_states.layout(),
-        //     value_states.is_contiguous()
-        // );
         // Length changes after pulling
         let kv_seqlen = key_states.dim(2)?;
         let n_rep = self.n_head / self.n_local_heads;
-        // TODO: Consider whether there's a better way to do this with 2 copy2ds instead of ucopy
-        // https://github.com/huggingface/candle/pull/2043 got the duplication wrong but there might still be something there
+        // TODO: Write Metal kernel equivalent
         #[cfg(not(feature = "cuda"))]
         let key_states = key_states
             .unsqueeze(2)?
