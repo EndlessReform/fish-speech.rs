@@ -1,9 +1,10 @@
 pub mod utils;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+#[cfg(feature = "cuda")]
+use candle_gqa_ops::ops::repeat_kv;
 use candle_nn::{
-    embedding, kv_cache::KvCache, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module,
-    RmsNorm, VarBuilder,
+    embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
 use serde::Deserialize;
 use serde_json;
@@ -161,7 +162,7 @@ pub struct Attention {
     dim: usize,
     wqkv: Linear,
     wo: Linear,
-    cache: KvCache,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -182,7 +183,8 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
+        // let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
+        let kv_cache = None;
 
         Ok(Self {
             n_head: config.n_head,
@@ -192,7 +194,7 @@ impl Attention {
             wqkv,
             wo,
             // TODO configure this, improve cache handling
-            cache,
+            kv_cache,
         })
     }
 
@@ -267,23 +269,35 @@ impl Attention {
             freqs_cis.1,
         )?;
 
-        let (key_states, value_states) = self
-            .cache
-            .append(&key_states.contiguous()?, &value_states.contiguous()?)?;
+        let (key_states, value_states) = match &self.kv_cache {
+            None => (key_states, value_states.contiguous()?),
+            Some((prev_k, prev_v)) => {
+                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
+                let value_states = Tensor::cat(&[prev_v, &value_states.contiguous()?], 2)?;
+                (key_states, value_states)
+            }
+        };
+        self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
         // Length changes after pulling
         let kv_seqlen = key_states.dim(2)?;
         let n_rep = self.n_head / self.n_local_heads;
-        // TODO: Consider whether there's a better way to do this with 2 copy2ds instead of ucopy
-        // https://github.com/huggingface/candle/pull/2043 got the duplication wrong but there might still be something there
+        // TODO: Write Metal kernel equivalent
+        #[cfg(not(feature = "cuda"))]
         let key_states = key_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        #[cfg(feature = "cuda")]
+        let key_states = repeat_kv(&key_states, n_rep)?;
+
+        #[cfg(not(feature = "cuda"))]
         let value_states = value_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        #[cfg(feature = "cuda")]
+        let value_states = repeat_kv(&value_states, n_rep)?;
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
         let mask = if seqlen > 1 { Some(mask) } else { None };
@@ -303,6 +317,9 @@ impl Attention {
             scale_factor,
             mask,
         )?;
+        drop(query_states);
+        drop(key_states);
+        drop(value_states);
 
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
 
@@ -310,7 +327,8 @@ impl Attention {
     }
 
     pub fn clear_cache(&mut self) {
-        self.cache.reset();
+        // self.cache.reset();
+        self.kv_cache = None;
     }
 }
 
