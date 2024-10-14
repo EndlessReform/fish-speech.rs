@@ -118,7 +118,7 @@ impl Module for FeedForward {
 }
 
 /// Returns (cos, sin) for the full possible batch size
-fn precompute_freqs_cis(
+pub fn precompute_freqs_cis(
     config: &BaseModelArgs,
     device: &Device,
     dtype: DType,
@@ -139,7 +139,7 @@ fn precompute_freqs_cis(
 }
 
 /// Copied from phi3.rs
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+pub fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
@@ -283,21 +283,21 @@ impl Attention {
         let kv_seqlen = key_states.dim(2)?;
         let n_rep = self.n_head / self.n_local_heads;
         // TODO: Write Metal kernel equivalent
-        #[cfg(not(feature = "cuda"))]
+        // #[cfg(not(feature = "cuda"))]
         let key_states = key_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
-        #[cfg(feature = "cuda")]
-        let key_states = repeat_kv(&key_states, n_rep)?;
+        // #[cfg(feature = "cuda")]
+        // let key_states = repeat_kv(&key_states, n_rep)?;
 
-        #[cfg(not(feature = "cuda"))]
+        // #[cfg(not(feature = "cuda"))]
         let value_states = value_states
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
-        #[cfg(feature = "cuda")]
-        let value_states = repeat_kv(&value_states, n_rep)?;
+        // #[cfg(feature = "cuda")]
+        // let value_states = repeat_kv(&value_states, n_rep)?;
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
         let mask = if seqlen > 1 { Some(mask) } else { None };
@@ -317,10 +317,6 @@ impl Attention {
             scale_factor,
             mask,
         )?;
-        drop(query_states);
-        drop(key_states);
-        drop(value_states);
-
         let y = y.transpose(1, 2)?.reshape((bsz, seqlen, self.dim))?;
 
         self.wo.forward(&y)

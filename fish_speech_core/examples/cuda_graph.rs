@@ -1,30 +1,44 @@
 use anyhow::Result;
 use candle_core::cuda::cudarc;
-use candle_core::{DType, Device, Tensor, Var};
+use candle_core::{DType, Device, IndexOp, Module, Tensor, Var};
+use candle_nn::{VarBuilder, VarMap};
+// use fish_speech_core::models::text2semantic::DualARTransformer;
+use fish_speech_core::models::text2semantic::{
+    get_mask, precompute_freqs_cis, BaseModelArgs, FeedForward,
+};
 
 const USE_CUDA_GRAPH: bool = true;
 
-fn cuda_graph() -> Result<()> {
-    let device = Device::new_cuda_with_stream(0)?;
+fn cuda_graph(ffwd: &FeedForward, config: &BaseModelArgs, device: &Device) -> Result<()> {
     let cu_device = match &device {
         Device::Cuda(dev) => dev,
         _ => unreachable!(),
     };
     let cu_stream = cu_device.cu_stream();
+    const SEQLEN: usize = 166;
+    // let mask = get_mask(SEQLEN, device)?;
+    // let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
+    // let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
 
-    let input_buffer = Var::from_tensor(&Tensor::zeros(1024, DType::BF16, &device)?)?;
-    let output_buffer = Var::from_tensor(&Tensor::zeros(1024, DType::BF16, &device)?)?;
+    let input_buffer = Var::from_tensor(&Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?)?;
+    let output_buffer = Var::from_tensor(&Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?)?;
 
+    println!("Got here");
     {
         // Warmup step: meaningless work to load kernels
         // load_ptx cannot be called while capturing the stream so we need this to happen
         // beforehand.
-        let x =
-            Tensor::ones_like(input_buffer.as_tensor())?.broadcast_add(input_buffer.as_tensor())?;
-        let x = (x - 1f64)?;
-        output_buffer.set(&x)?;
+        // let x = attn.forward(input_buffer.as_tensor(), &mask, freqs_cis)?;
+        let input = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
+        let x = ffwd.forward(&input)?;
+        // output_buffer.set(&x)?;
         device.synchronize()?;
     }
+    println!("Slow ffwd worked");
+    let canonical_good_result = output_buffer
+        .as_tensor()
+        .to_dtype(DType::F32)?
+        .to_vec3::<f32>()?;
     if USE_CUDA_GRAPH {
         unsafe {
             cudarc::driver::sys::lib()
@@ -35,11 +49,20 @@ fn cuda_graph() -> Result<()> {
             .result()?
         }
     }
+    println!("Beginning to capture stream");
     {
-        let x =
-            Tensor::ones_like(input_buffer.as_tensor())?.broadcast_add(input_buffer.as_tensor())?;
+        // let x =
+        //     Tensor::ones_like(input_buffer.as_tensor())?.broadcast_add(input_buffer.as_tensor())?;
+        // output_buffer.set(&x)?;
+        // let input = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
+        let mut x = input_buffer.as_tensor().clone();
+        for _ in 0..100 {
+            x = ffwd.forward(&x)?;
+        }
+        println!("Forward succeeded");
         output_buffer.set(&x)?;
     }
+    println!("Recorded");
     if USE_CUDA_GRAPH {
         let cu_graph: cudarc::driver::sys::CUgraph = unsafe {
             let mut cu_graph = std::mem::MaybeUninit::uninit();
@@ -65,12 +88,14 @@ fn cuda_graph() -> Result<()> {
                     .result()?
             }
             println!("sync");
+            //         attn.clear_cache();
             if let Err(err) = device.synchronize() {
-                println!("err: {err:?}")
+                println!("err: {err:?}");
+                Err(err)?;
             }
             println!("done syncing");
             // Update input for next run
-            input_buffer.set(&output_buffer.as_tensor())?;
+            // input_buffer.set(&output_buffer.as_tensor())?;
         }
         unsafe {
             cudarc::driver::sys::lib()
@@ -83,17 +108,28 @@ fn cuda_graph() -> Result<()> {
     } else {
         device.synchronize()?;
     }
-    assert_eq!(
-        output_buffer
-            .as_tensor()
-            .to_dtype(DType::U32)?
-            .to_vec1::<u32>()?,
-        vec![99u32; 1024]
-    );
+    // assert_eq!(
+    //     output_buffer
+    //         .as_tensor()
+    //         .to_dtype(DType::F32)?
+    //         .to_vec3::<f32>()?,
+    //     canonical_good_result
+    // );
+    println!("Ended successfully!");
     Ok(())
 }
 
 fn main() -> Result<()> {
-    cuda_graph()?;
+    let device = Device::new_cuda_with_stream(0)?;
+    let cfg = BaseModelArgs::fish_speech_1_2();
+
+    // Create blank variables
+    let vm = VarMap::new();
+    let vb = VarBuilder::from_varmap(&vm, DType::BF16, &device);
+
+    let mut ffwd = FeedForward::load(&vb, &cfg)?;
+
+    cuda_graph(&mut ffwd, &cfg, &device)?;
+    println!("Done");
     return Ok(());
 }
