@@ -227,7 +227,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e1a39b963e261c58017edf2007e5b63425ad21538aaaf51fe23d1da41703701"
 dependencies = [
  "byteorder",
- "candle-kernels",
+ "candle-kernels 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cudarc",
+ "gemm",
+ "half",
+ "memmap2",
+ "num-traits",
+ "num_cpus",
+ "rand",
+ "rand_distr",
+ "rayon",
+ "safetensors",
+ "thiserror",
+ "yoke",
+ "zip",
+]
+
+[[package]]
+name = "candle-core"
+version = "0.7.2"
+source = "git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc#0d96ec31e8be03f844ed0aed636d6217dee9c7bc"
+dependencies = [
+ "byteorder",
+ "candle-kernels 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "candle-metal-kernels",
  "cudarc",
  "gemm",
@@ -253,14 +275,14 @@ checksum = "ad01ec40011de94c0dee88563c6c16eb12eb6d212d176adeff53315c141e0bd1"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
- "candle-core",
+ "candle-core 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "half",
 ]
 
 [[package]]
 name = "candle-gqa-kernels"
 version = "0.1.0"
-source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=master#e2c802ca2e0fb3ed46be7df5d2bdbd389cee97ee"
+source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=cuda-stream-compat#6b7dcd96d7d6d92003eee6f2e409f1e9c114141b"
 dependencies = [
  "bindgen_cuda",
 ]
@@ -268,9 +290,9 @@ dependencies = [
 [[package]]
 name = "candle-gqa-ops"
 version = "0.1.0"
-source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=master#e2c802ca2e0fb3ed46be7df5d2bdbd389cee97ee"
+source = "git+https://github.com/EndlessReform/candle-gqa-kernels.git?branch=cuda-stream-compat#6b7dcd96d7d6d92003eee6f2e409f1e9c114141b"
 dependencies = [
- "candle-core",
+ "candle-core 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "candle-gqa-kernels",
 ]
 
@@ -284,10 +306,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-kernels"
+version = "0.7.2"
+source = "git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc#0d96ec31e8be03f844ed0aed636d6217dee9c7bc"
+dependencies = [
+ "bindgen_cuda",
+]
+
+[[package]]
 name = "candle-metal-kernels"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "166a92826d615d98b205e346e52128fa0439f2ab3302587403fdc558b4219e19"
+source = "git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc#0d96ec31e8be03f844ed0aed636d6217dee9c7bc"
 dependencies = [
  "metal",
  "once_cell",
@@ -301,7 +330,21 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "898f8d21b8bdf559a1c8635e2db8386b2134015cd3003c18c1a30a22a67daec6"
 dependencies = [
- "candle-core",
+ "candle-core 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "half",
+ "num-traits",
+ "rayon",
+ "safetensors",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "candle-nn"
+version = "0.7.2"
+source = "git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc#0d96ec31e8be03f844ed0aed636d6217dee9c7bc"
+dependencies = [
+ "candle-core 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "candle-metal-kernels",
  "half",
  "metal",
@@ -315,12 +358,11 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06b8a130a8ac1d1e20696d89f7a52948902e037ad0eec085fceb77021007cfee"
+source = "git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc#0d96ec31e8be03f844ed0aed636d6217dee9c7bc"
 dependencies = [
  "byteorder",
- "candle-core",
- "candle-nn",
+ "candle-core 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
+ "candle-nn 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "fancy-regex",
  "num-traits",
  "rand",
@@ -688,10 +730,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "byteorder",
- "candle-core",
+ "candle-core 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "candle-flash-attn",
  "candle-gqa-ops",
- "candle-nn",
+ "candle-nn 0.7.2 (git+https://github.com/huggingface/candle.git?rev=0d96ec31e8be03f844ed0aed636d6217dee9c7bc)",
  "candle-transformers",
  "clap",
  "hf-hub",
@@ -712,8 +754,8 @@ dependencies = [
 name = "fish_speech_python"
 version = "0.1.0"
 dependencies = [
- "candle-core",
- "candle-nn",
+ "candle-core 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "candle-nn 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "fish_speech_core",
  "hf-hub",
  "pyo3",
