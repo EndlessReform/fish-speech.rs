@@ -38,6 +38,7 @@ fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> 
         // output_buffer.set(&x)?;
         device.synchronize()?;
     }
+    attn.clear_cache();
     println!("Slow ffwd worked");
     let mask = get_mask(SEQLEN, device)?;
     let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
@@ -66,10 +67,9 @@ fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> 
         // let mut x = input_buffer.as_tensor().clone();
         let x = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
         let x = attn.forward(&x, &mask, freqs_cis)?;
-        println!("Forward succeeded");
         output_buffer.set(&x)?;
+        attn.clear_cache();
     }
-    println!("Recorded");
     if USE_CUDA_GRAPH {
         let cu_graph: cudarc::driver::sys::CUgraph = unsafe {
             let mut cu_graph = std::mem::MaybeUninit::uninit();
@@ -95,33 +95,33 @@ fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> 
                     .result()?
             }
             println!("sync");
-            //         attn.clear_cache();
+            // attn.clear_cache();
             if let Err(err) = device.synchronize() {
                 println!("err: {err:?}");
                 Err(err)?;
             }
-            println!("done syncing");
             // Update input for next run
             // input_buffer.set(&output_buffer.as_tensor())?;
-            unsafe {
-                cudarc::driver::sys::lib()
-                    .cuGraphDestroy(cu_graph)
-                    .result()?;
-                cudarc::driver::sys::lib()
-                    .cuGraphExecDestroy(cu_graph_e)
-                    .result()?;
-            }
+        }
+        println!("done syncing");
+        unsafe {
+            cudarc::driver::sys::lib()
+                .cuGraphDestroy(cu_graph)
+                .result()?;
+            cudarc::driver::sys::lib()
+                .cuGraphExecDestroy(cu_graph_e)
+                .result()?;
         }
     } else {
         device.synchronize()?;
     }
-    // // assert_eq!(
-    //     output_buffer
-    //         .as_tensor()
-    //         .to_dtype(DType::F32)?
-    //         .to_vec3::<f32>()?,
-    //     canonical_good_result
-    // );
+    assert_eq!(
+        output_buffer
+            .as_tensor()
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?,
+        canonical_good_result
+    );
     println!("Ended successfully!");
     Ok(())
 }
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
     let vm = VarMap::new();
     let vb = VarBuilder::from_varmap(&vm, DType::BF16, &device);
 
-    let mut ffwd = Attention::load(&vb, &cfg, false)?;
+    let mut ffwd = Attention::load(&vb, &cfg, true)?;
 
     cuda_graph(&mut ffwd, &cfg, &device)?;
     println!("Done");
