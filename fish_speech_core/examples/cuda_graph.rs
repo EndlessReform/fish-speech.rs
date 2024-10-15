@@ -1,24 +1,26 @@
 use anyhow::Result;
 use candle_core::cuda::cudarc;
-use candle_core::{DType, Device, IndexOp, Module, Tensor, Var};
+use candle_core::{DType, Device, IndexOp, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
-// use fish_speech_core::models::text2semantic::DualARTransformer;
-use fish_speech_core::models::text2semantic::{
-    get_mask, precompute_freqs_cis, BaseModelArgs, TransformerBlock,
-};
+use fish_speech_core::models::text2semantic::DualARTransformer;
+use fish_speech_core::models::text2semantic::{get_mask, precompute_freqs_cis, BaseModelArgs};
 
 const USE_CUDA_GRAPH: bool = true;
 
-fn cuda_graph(block: &mut TransformerBlock, config: &BaseModelArgs, device: &Device) -> Result<()> {
+fn cuda_graph(
+    model: &mut DualARTransformer,
+    config: &BaseModelArgs,
+    device: &Device,
+) -> Result<()> {
     let cu_device = match &device {
         Device::Cuda(dev) => dev,
         _ => unreachable!(),
     };
     let cu_stream = cu_device.cu_stream();
     const SEQLEN: usize = 1;
-    let mask = get_mask(SEQLEN, device)?;
-    let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
-    let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
+    // let mask = get_mask(SEQLEN, device)?;
+    // let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
+    // let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
 
     let input_buffer = Var::from_tensor(&Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?)?;
     let output_buffer = Var::from_tensor(&Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?)?;
@@ -28,20 +30,15 @@ fn cuda_graph(block: &mut TransformerBlock, config: &BaseModelArgs, device: &Dev
         // Warmup step: meaningless work to load kernels
         // load_ptx cannot be called while capturing the stream so we need this to happen
         // beforehand.
-        let mask = get_mask(SEQLEN, device)?;
-        let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
-        let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
-
-        let input = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
         // let x = ffwd.forward(&input)?;
-        let x = block.forward(input_buffer.as_tensor(), &mask, freqs_cis)?;
+        let x = model.forward_generate_fast(input_buffer.as_tensor(), 0)?;
         output_buffer.set(&x)?;
         device.synchronize()?;
     }
-    block.attention.clear_cache();
+    model.clear_fast_layer_caches();
     println!("PTX load worked");
-    let mask = get_mask(SEQLEN, device)?;
-    let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
+    // let mask = get_mask(SEQLEN, device)?;
+    // let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
     let canonical_good_result = output_buffer
         .as_tensor()
         .to_dtype(DType::F32)?
@@ -62,13 +59,14 @@ fn cuda_graph(block: &mut TransformerBlock, config: &BaseModelArgs, device: &Dev
         //     Tensor::ones_like(input_buffer.as_tensor())?.broadcast_add(input_buffer.as_tensor())?;
         // output_buffer.set(&x)?;
         // let input = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
-        let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
+        // let freqs_cis = (&cos_full.i(0..SEQLEN)?, &sin_full.i(0..SEQLEN)?);
 
         // let mut x = input_buffer.as_tensor().clone();
-        let x = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
-        let x = block.forward(&x, &mask, freqs_cis)?;
+        // let x = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
+        let x = model.forward_generate_fast(input_buffer.as_tensor(), 0)?;
         output_buffer.set(&x)?;
-        block.attention.clear_cache();
+        // block.attention.clear_cache();
+        model.clear_fast_layer_caches();
     }
     if USE_CUDA_GRAPH {
         let cu_graph: cudarc::driver::sys::CUgraph = unsafe {
@@ -134,9 +132,9 @@ fn main() -> Result<()> {
     let vm = VarMap::new();
     let vb = VarBuilder::from_varmap(&vm, DType::BF16, &device);
 
-    let mut block = TransformerBlock::load(&vb, &cfg)?;
+    let mut model = DualARTransformer::load(&vb, &cfg, 5)?;
 
-    cuda_graph(&mut block, &cfg, &device)?;
+    cuda_graph(&mut model, &cfg, &device)?;
     println!("Done");
     return Ok(());
 }
