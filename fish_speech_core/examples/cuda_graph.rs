@@ -4,12 +4,12 @@ use candle_core::{DType, Device, IndexOp, Module, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 // use fish_speech_core::models::text2semantic::DualARTransformer;
 use fish_speech_core::models::text2semantic::{
-    get_mask, precompute_freqs_cis, Attention, BaseModelArgs,
+    get_mask, precompute_freqs_cis, BaseModelArgs, TransformerBlock,
 };
 
 const USE_CUDA_GRAPH: bool = true;
 
-fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> Result<()> {
+fn cuda_graph(block: &mut TransformerBlock, config: &BaseModelArgs, device: &Device) -> Result<()> {
     let cu_device = match &device {
         Device::Cuda(dev) => dev,
         _ => unreachable!(),
@@ -34,12 +34,12 @@ fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> 
 
         let input = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
         // let x = ffwd.forward(&input)?;
-        let x = attn.forward(input_buffer.as_tensor(), &mask, freqs_cis)?;
-        // output_buffer.set(&x)?;
+        let x = block.forward(input_buffer.as_tensor(), &mask, freqs_cis)?;
+        output_buffer.set(&x)?;
         device.synchronize()?;
     }
-    attn.clear_cache();
-    println!("Slow ffwd worked");
+    block.attention.clear_cache();
+    println!("PTX load worked");
     let mask = get_mask(SEQLEN, device)?;
     let (cos_full, sin_full) = precompute_freqs_cis(config, device, DType::BF16)?;
     let canonical_good_result = output_buffer
@@ -66,9 +66,9 @@ fn cuda_graph(attn: &mut Attention, config: &BaseModelArgs, device: &Device) -> 
 
         // let mut x = input_buffer.as_tensor().clone();
         let x = Tensor::zeros((1, SEQLEN, 1024), DType::BF16, &device)?;
-        let x = attn.forward(&x, &mask, freqs_cis)?;
+        let x = block.forward(&x, &mask, freqs_cis)?;
         output_buffer.set(&x)?;
-        attn.clear_cache();
+        block.attention.clear_cache();
     }
     if USE_CUDA_GRAPH {
         let cu_graph: cudarc::driver::sys::CUgraph = unsafe {
@@ -134,9 +134,9 @@ fn main() -> Result<()> {
     let vm = VarMap::new();
     let vb = VarBuilder::from_varmap(&vm, DType::BF16, &device);
 
-    let mut ffwd = Attention::load(&vb, &cfg, true)?;
+    let mut block = TransformerBlock::load(&vb, &cfg)?;
 
-    cuda_graph(&mut ffwd, &cfg, &device)?;
+    cuda_graph(&mut block, &cfg, &device)?;
     println!("Done");
     return Ok(());
 }
