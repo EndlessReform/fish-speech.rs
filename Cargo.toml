@@ -1,5 +1,5 @@
 [workspace]
-members = ["fish_speech_core", "fish_speech_python"]
+members = ["fish_speech_core", "fish_speech_python", "server"]
 resolver = "2"
 
 [profile.release-with-debug]
