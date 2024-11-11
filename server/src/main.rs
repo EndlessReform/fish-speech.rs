@@ -1,9 +1,4 @@
-use anyhow;
-use axum::{
-    body::Body,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::{body::Body, http::StatusCode, response::Response};
 use axum::{extract::State, routing::post, Json, Router};
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
@@ -116,7 +111,7 @@ async fn generate_speech(
     };
 
     let pcm: Vec<f32> = {
-        let mut vocoder = state.vocoder_model.lock().await;
+        let vocoder = state.vocoder_model.lock().await;
         let feature_lengths = Tensor::from_slice(
             &[semantic_tokens
                 .dim(D::Minus1)
@@ -145,7 +140,7 @@ async fn generate_speech(
     };
 
     let mut audio_buf = Vec::new();
-    write_pcm_as_wav(&mut audio_buf, &pcm, 24000).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    write_pcm_as_wav(&mut audio_buf, &pcm, 44100).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Response::builder()
         .status(StatusCode::OK)

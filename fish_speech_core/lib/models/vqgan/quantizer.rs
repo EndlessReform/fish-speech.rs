@@ -120,7 +120,7 @@ impl DownsampleFiniteScalarQuantizer {
 
     pub fn upsample(&self, z: &Tensor) -> Result<Tensor> {
         let mut z = z.clone();
-        for (conv, block) in &self.upsample_layers {
+        for (conv, block) in self.upsample_layers.iter().rev() {
             z = conv.forward(&z)?;
             z = block.forward(&z)?;
         }
