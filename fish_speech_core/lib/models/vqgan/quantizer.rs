@@ -3,11 +3,11 @@ use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
 use super::utils::{FishConvNet, FishTransConvNet};
 use candle_core::{Result, Tensor};
-use candle_nn::{seq, Conv1dConfig, ConvTranspose1dConfig, Module, Sequential, VarBuilder};
+use candle_nn::{Conv1dConfig, ConvTranspose1dConfig, Module, VarBuilder};
 
 pub struct DownsampleFiniteScalarQuantizer {
-    downsample: Sequential,
-    _upsample: Sequential,
+    downsample_layers: Vec<(FishConvNet, ConvNeXtBlock)>,
+    upsample_layers: Vec<(FishTransConvNet, ConvNeXtBlock)>,
     residual_fsq: GroupedResidualFSQ,
     pub downsample_factor: Vec<usize>,
 }
@@ -34,14 +34,13 @@ impl DownsampleFiniteScalarQuantizer {
             },
         )?;
 
-        let mut downsample = seq();
+        let mut downsample_layers = Vec::new();
         let vb_ds = vb.pp("downsample");
         for (idx, factor) in config.downsample_factor.iter().enumerate() {
             let in_channels = all_dims[idx];
             let out_channels = all_dims[idx + 1];
 
-            let mut layer = seq();
-            layer = layer.add(FishConvNet::load(
+            let conv = FishConvNet::load(
                 vb_ds.pp(format!("{}.0", idx)),
                 in_channels,
                 out_channels,
@@ -51,23 +50,24 @@ impl DownsampleFiniteScalarQuantizer {
                     ..Default::default()
                 },
                 model,
-            )?);
-            layer = layer.add(ConvNeXtBlock::load(
+            )?;
+
+            let block = ConvNeXtBlock::load(
                 vb_ds.pp(&format!("{}.1", idx)),
                 &ConvNeXtBlockConfig::with_dim(out_channels),
                 &model,
-            )?);
-            downsample = downsample.add(layer);
+            )?;
+
+            downsample_layers.push((conv, block));
         }
 
-        let mut upsample_layers: Vec<Sequential> = vec![];
+        let mut upsample_layers = Vec::new();
         let vb_us = vb.pp("upsample");
         for (idx, factor) in config.downsample_factor.iter().enumerate().rev() {
             let in_channels = all_dims[idx + 1];
             let out_channels = all_dims[idx];
 
-            let mut layer = seq();
-            layer = layer.add(FishTransConvNet::load(
+            let conv = FishTransConvNet::load(
                 vb_us.pp(format!("{}.0", idx)),
                 in_channels,
                 out_channels,
@@ -77,29 +77,32 @@ impl DownsampleFiniteScalarQuantizer {
                     ..Default::default()
                 },
                 model,
-            )?);
-            layer = layer.add(ConvNeXtBlock::load(
+            )?;
+
+            let block = ConvNeXtBlock::load(
                 vb_us.pp(&format!("{}.1", idx)),
                 &ConvNeXtBlockConfig::with_dim(in_channels),
                 &model,
-            )?);
-            upsample_layers.push(layer);
+            )?;
+
+            upsample_layers.push((conv, block));
         }
-        let upsample = upsample_layers
-            .into_iter()
-            .rev()
-            .fold(seq(), |acc, layer| acc.add(layer));
 
         Ok(Self {
             residual_fsq,
-            downsample,
+            downsample_layers,
+            upsample_layers,
             downsample_factor: config.downsample_factor.clone(),
-            _upsample: upsample,
         })
     }
 
     pub fn encode(&self, z: &Tensor) -> Result<Tensor> {
-        let z = self.downsample.forward(z)?;
+        let mut z = z.clone();
+        // Apply each downsample layer pair in sequence
+        for (conv, block) in &self.downsample_layers {
+            z = conv.forward(&z)?;
+            z = block.forward(&z)?;
+        }
 
         // Transpose z (equivalent to .mT in Python)
         let z_t = z.transpose(1, 2)?;
@@ -108,8 +111,6 @@ impl DownsampleFiniteScalarQuantizer {
         let (_codes, indices) = self.residual_fsq.forward(&z_t)?;
 
         // Rearrange indices
-        // Original: indices = rearrange(indices, "g b l r -> b (g r) l")
-        // We need to do this manually in Rust
         let (g, b, l, r) = indices.dims4()?;
         let indices = indices.permute((1, 0, 3, 2))?; // b g r l
         let indices = indices.reshape((b, g * r, l))?;
@@ -118,8 +119,12 @@ impl DownsampleFiniteScalarQuantizer {
     }
 
     pub fn upsample(&self, z: &Tensor) -> Result<Tensor> {
-        // TODO: Residual_FSQ
-        self._upsample.forward(z)
+        let mut z = z.clone();
+        for (conv, block) in &self.upsample_layers {
+            z = conv.forward(&z)?;
+            z = block.forward(&z)?;
+        }
+        Ok(z)
     }
 
     pub fn decode(&self, indices: &Tensor) -> Result<Tensor> {

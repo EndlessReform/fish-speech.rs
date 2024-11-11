@@ -3,6 +3,10 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "server"
+path = "lib/lib.rs"
+
 [features]
 cuda = [
     "candle-core/cuda",

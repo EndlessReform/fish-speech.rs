@@ -1,13 +1,23 @@
 use anyhow;
+use axum::{
+    body::Body,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use axum::{extract::State, routing::post, Json, Router};
-use candle_core::{DType, Device, Error, Tensor};
+use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
+use fish_speech_core::audio::wav::write_pcm_as_wav;
 use fish_speech_core::models::{
-    text2semantic::{BaseModelArgs, DualARTransformer},
+    text2semantic::{
+        utils::{encode::encode_tokens, generate::generate, sample::SamplingArgs},
+        BaseModelArgs, DualARTransformer,
+    },
     vqgan::{config::FireflyConfig, config::WhichModel, decoder::FireflyDecoder},
 };
 use serde::{Deserialize, Serialize};
+use server::load_speaker_prompts;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,38 +25,14 @@ use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
-// Load all voices from a directory
-fn load_voices(
-    voice_dir: &PathBuf,
-    device: &Device,
-) -> anyhow::Result<(HashMap<String, Tensor>, Tensor)> {
-    let mut voices = HashMap::new();
-    let mut default_voice = None;
-
-    for entry in std::fs::read_dir(voice_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "npy") {
-            let voice_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid voice filename"))?
-                .to_string();
-
-            let tensor = Tensor::read_npy(&path)?.to_device(device)?;
-
-            if voice_name == "default" {
-                default_voice = Some(tensor.clone());
-            }
-
-            voices.insert(voice_name, tensor);
-        }
-    }
-
-    let default_voice = default_voice
-        .ok_or_else(|| anyhow::anyhow!("No default.npy voice found in voices directory"))?;
-
-    Ok((voices, default_voice))
+/// Shared state between requests
+pub struct AppState {
+    semantic_model: Arc<Mutex<DualARTransformer>>,
+    vocoder_model: Arc<Mutex<FireflyDecoder>>,
+    tokenizer: Arc<Tokenizer>,
+    device: Device,
+    voices: Arc<HashMap<String, Tensor>>,
+    default_voice: Arc<Tensor>,
 }
 
 #[derive(Parser, Debug)]
@@ -79,6 +65,95 @@ pub struct GenerateResponse {
     audio: Vec<f32>, // Or whatever your audio format is
 }
 
+async fn generate_speech(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<GenerateRequest>,
+) -> Result<Response<Body>, StatusCode> {
+    let voice_embedding = state
+        .voices
+        .get(&request.voice)
+        .unwrap_or(&state.default_voice);
+
+    let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+
+    let encoded_input = encode_tokens(
+        &state.tokenizer,
+        &request.input,
+        &state.device,
+        None,
+        num_codebooks,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let final_prompt = Tensor::cat(&[voice_embedding, &encoded_input], D::Minus1)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let sampling_args = SamplingArgs {
+        temp: 0.7,
+        top_p: 0.7,
+        top_k: 256,
+        repetition_penalty: 1.2,
+    };
+
+    let semantic_tokens = {
+        let mut model = state.semantic_model.lock().await;
+        let tokens = generate(
+            &mut model,
+            &final_prompt,
+            1024,
+            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
+            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+            &sampling_args,
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        model.clear_slow_layer_caches();
+        tokens
+            .broadcast_sub(
+                &Tensor::ones_like(&tokens).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let pcm: Vec<f32> = {
+        let mut vocoder = state.vocoder_model.lock().await;
+        let feature_lengths = Tensor::from_slice(
+            &[semantic_tokens
+                .dim(D::Minus1)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? as u32],
+            1,
+            &state.device,
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        vocoder
+            .decode(
+                &semantic_tokens
+                    .unsqueeze(0)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                &feature_lengths,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .to_dtype(DType::F32)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .squeeze(0)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .squeeze(0)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .to_vec1()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let mut audio_buf = Vec::new();
+    write_pcm_as_wav(&mut audio_buf, &pcm, 24000).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "audio/wav")
+        .body(Body::from(audio_buf))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -94,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 
     let checkpoint_dir = args.checkpoint.canonicalize().unwrap();
     let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
-    let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
+    let tokenizer = Arc::new(Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap());
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]
     let dtype = DType::BF16;
@@ -148,6 +223,28 @@ async fn main() -> anyhow::Result<()> {
     )?));
     let dt = start_load.elapsed();
     println!("Models loaded in {:.2}s", dt.as_secs_f64());
+    // Load all voices into memory
+    let (speakers, default_speaker) =
+        load_speaker_prompts(&args.voice_dir, &tokenizer, &device, config.num_codebooks)?;
+    println!("Loaded {} voices", speakers.len());
+
+    let state = Arc::new(AppState {
+        semantic_model,
+        vocoder_model,
+        tokenizer,
+        device,
+        voices: Arc::new(speakers),
+        default_voice: Arc::new(default_speaker),
+    });
+
+    // Create router
+    let app = Router::new()
+        .route("/v1/audio/speech", post(generate_speech))
+        .with_state(state);
+
+    // Run server
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 
     Ok(())
 }
