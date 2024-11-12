@@ -6,7 +6,10 @@ use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
 use fish_speech_core::models::{
     text2semantic::{
-        utils::{encode::encode_tokens, generate::generate, sample::SamplingArgs},
+        utils::{
+            encode::encode_tokens_batch, generate::generate, sample::SamplingArgs,
+            text::preprocess_text,
+        },
         BaseModelArgs, DualARTransformer,
     },
     vqgan::{config::FireflyConfig, config::WhichModel, decoder::FireflyDecoder},
@@ -70,77 +73,85 @@ async fn generate_speech(
         .unwrap_or(&state.default_voice);
 
     let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+    let chunks = preprocess_text(&request.input);
 
-    let encoded_input = encode_tokens(
-        &state.tokenizer,
-        &request.input,
-        &state.device,
-        None,
-        num_codebooks,
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let final_prompt = Tensor::cat(&[voice_embedding, &encoded_input], D::Minus1)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let sampling_args = SamplingArgs {
-        temp: 0.7,
-        top_p: 0.7,
-        top_k: 256,
-        repetition_penalty: 1.2,
-    };
-
-    let semantic_tokens = {
-        let mut model = state.semantic_model.lock().await;
-        let tokens = generate(
-            &mut model,
-            &final_prompt,
-            1024,
-            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
-            &sampling_args,
-        )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        model.clear_slow_layer_caches();
-        tokens
-            .broadcast_sub(
-                &Tensor::ones_like(&tokens).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-            )
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    };
-
-    let pcm: Vec<f32> = {
-        let vocoder = state.vocoder_model.lock().await;
-        let feature_lengths = Tensor::from_slice(
-            &[semantic_tokens
-                .dim(D::Minus1)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? as u32],
-            1,
+    let mut all_pcm = Vec::new();
+    for chunk in chunks.iter() {
+        let encoded_input = encode_tokens_batch(
+            &state.tokenizer,
+            vec![chunk.clone()],
             &state.device,
+            None,
+            num_codebooks,
         )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .pop()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        vocoder
-            .decode(
-                &semantic_tokens
-                    .unsqueeze(0)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-                &feature_lengths,
+        let final_prompt = Tensor::cat(&[voice_embedding, &encoded_input], D::Minus1)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let sampling_args = SamplingArgs {
+            temp: 0.7,
+            top_p: 0.7,
+            top_k: 256,
+            repetition_penalty: 1.2,
+        };
+
+        let semantic_tokens = {
+            let mut model = state.semantic_model.lock().await;
+            let tokens = generate(
+                &mut model,
+                &final_prompt,
+                1024,
+                state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
+                state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+                &sampling_args,
             )
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .to_dtype(DType::F32)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .squeeze(0)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .squeeze(0)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .to_vec1()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    };
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            model.clear_slow_layer_caches();
+            tokens
+                .broadcast_sub(
+                    &Tensor::ones_like(&tokens).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                )
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        };
+
+        let pcm: Vec<f32> = {
+            let vocoder = state.vocoder_model.lock().await;
+            let feature_lengths = Tensor::from_slice(
+                &[semantic_tokens
+                    .dim(D::Minus1)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? as u32],
+                1,
+                &state.device,
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            vocoder
+                .decode(
+                    &semantic_tokens
+                        .unsqueeze(0)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                    &feature_lengths,
+                )
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .to_dtype(DType::F32)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .squeeze(0)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .squeeze(0)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .to_vec1()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        };
+        all_pcm.extend(pcm);
+    }
 
     let mut audio_buf = Vec::new();
-    write_pcm_as_wav(&mut audio_buf, &pcm, 44100).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Response::builder()
         .status(StatusCode::OK)
