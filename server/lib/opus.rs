@@ -1,10 +1,7 @@
 use anyhow::Result;
-use bytes::Bytes;
-use futures_util::Stream;
 use ogg::PacketWriter;
 use opus::{Application, Channels, Encoder};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+// use rubato::{FftFixedInOut, Resampler};
 
 pub struct OpusEncoder {
     encoder: Encoder,
@@ -92,81 +89,5 @@ impl OpusEncoder {
         self.packet_writer.inner_mut().clear();
 
         Ok(output)
-    }
-}
-
-pub struct OpusStream {
-    encoder: OpusEncoder,
-    pcm_data: Vec<f32>,
-    chunk_size: usize,
-    current_pos: usize,
-    buffer: Vec<u8>,
-    buffer_pos: usize,
-    finished: bool,
-}
-
-impl OpusStream {
-    pub fn new(pcm_data: Vec<f32>) -> Result<Self> {
-        Ok(Self {
-            encoder: OpusEncoder::new()?,
-            chunk_size: 24000, // 1 second chunks
-            pcm_data,
-            current_pos: 0,
-            buffer: Vec::new(),
-            buffer_pos: 0,
-            finished: false,
-        })
-    }
-}
-
-impl Stream for OpusStream {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Send buffered data if we have any
-        if self.buffer_pos < self.buffer.len() {
-            let chunk_size = 1024;
-            let end = std::cmp::min(self.buffer_pos + chunk_size, self.buffer.len());
-            let chunk = self.buffer[self.buffer_pos..end].to_vec();
-            self.buffer_pos = end;
-            return Poll::Ready(Some(Ok(Bytes::from(chunk))));
-        }
-
-        // If we're finished and buffer is empty, we're done
-        if self.finished {
-            return Poll::Ready(None);
-        }
-
-        // Process next PCM chunk if available
-        if self.current_pos < self.pcm_data.len() {
-            let end = std::cmp::min(self.current_pos + self.chunk_size, self.pcm_data.len());
-            let pcm_chunk = self.pcm_data[self.current_pos..end].to_vec();
-
-            match self.encoder.encode_pcm(&pcm_chunk) {
-                Ok(encoded) => {
-                    self.buffer = encoded;
-                    self.buffer_pos = 0;
-                    self.current_pos = end;
-
-                    let chunk_size = 1024;
-                    let end = std::cmp::min(chunk_size, self.buffer.len());
-                    let chunk = self.buffer[..end].to_vec();
-                    self.buffer_pos = end;
-
-                    if self.current_pos >= self.pcm_data.len() {
-                        self.finished = true;
-                    }
-
-                    Poll::Ready(Some(Ok(Bytes::from(chunk))))
-                }
-                Err(e) => Poll::Ready(Some(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                )))),
-            }
-        } else {
-            self.finished = true;
-            Poll::Ready(None)
-        }
     }
 }
