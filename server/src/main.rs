@@ -31,6 +31,8 @@ pub struct AppState {
     device: Device,
     voices: Arc<HashMap<String, Tensor>>,
     default_voice: Arc<Tensor>,
+    temp: f64,
+    top_p: f64,
 }
 
 #[derive(Parser, Debug)]
@@ -49,6 +51,14 @@ struct Args {
     /// Port to listen on
     #[arg(short, long, default_value = "3000")]
     port: u16,
+
+    /// Temperature for sampling (higher = more random)
+    #[arg(long, default_value = "0.7")]
+    temp: f64,
+
+    /// Top-p (nucleus) sampling threshold
+    #[arg(long, default_value = "0.8")]
+    top_p: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,8 +102,8 @@ async fn generate_speech(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let sampling_args = SamplingArgs {
-            temp: 0.7,
-            top_p: 0.7,
+            temp: state.temp,
+            top_p: state.top_p,
             top_k: 256,
             repetition_penalty: 1.2,
         };
@@ -241,6 +251,8 @@ async fn main() -> anyhow::Result<()> {
         device,
         voices: Arc::new(speakers),
         default_voice: Arc::new(default_speaker),
+        temp: args.temp,
+        top_p: args.top_p,
     });
 
     // Create router
