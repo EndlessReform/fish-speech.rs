@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::{body::Body, http::StatusCode, response::Response};
 use axum::{extract::State, routing::post, Json, Router};
 use candle_core::{DType, Device, Tensor, D};
@@ -16,12 +17,16 @@ use fish_speech_core::models::{
 };
 use serde::{Deserialize, Serialize};
 use server::load_speaker_prompts;
+use server::opus::OpusStream;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
+// Re-export the key types
+pub use bytes::Bytes;
+pub use futures_util::Stream;
 
 /// Shared state between requests
 pub struct AppState {
@@ -66,6 +71,7 @@ pub struct GenerateRequest {
     model: String, // Ignored for now
     voice: String,
     input: String,
+    response_format: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -159,15 +165,35 @@ async fn generate_speech(
         all_pcm.extend(pcm);
     }
 
-    let mut audio_buf = Vec::new();
-    write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if request.response_format == Some("opus".into()) {
+        let stream = OpusStream::new(all_pcm)
+            .with_context(|| "Failed to create Opus stream")
+            .map_err(|e| {
+                tracing::error!("Opus stream creation failed: {:#}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "audio/wav")
-        .body(Body::from(audio_buf))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "audio/ogg")
+            .header("Transfer-Encoding", "chunked")
+            .body(Body::from_stream(stream))
+            .map_err(|e| {
+                tracing::error!("Response creation failed: {:#}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })
+    } else {
+        // Your existing WAV code...
+        let mut audio_buf = Vec::new();
+        write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "audio/wav")
+            .body(Body::from(audio_buf))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
 }
 
 #[tokio::main]

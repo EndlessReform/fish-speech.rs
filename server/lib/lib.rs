@@ -1,3 +1,5 @@
+pub mod opus;
+
 use candle_core::{Device, Tensor};
 use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
 use serde::Deserialize;
