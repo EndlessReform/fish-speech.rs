@@ -7,7 +7,7 @@ use candle_core::{DType, Tensor, D};
 use fish_speech_core::audio::wav::write_pcm_as_wav;
 use fish_speech_core::models::text2semantic::utils::{
     encode::encode_tokens_batch,
-    generate::generate,
+    generate::TokenGenerator,
     sample::SamplingArgs,
     text::{preprocess_text, TextChunk},
 };
@@ -75,17 +75,24 @@ async fn generate_pcm_chunk(
 
     let semantic_tokens = {
         let mut model = state.semantic_model.lock().await;
-        let tokens = generate(
+        // TODO: Actually take advantage of the iterator! for chunking
+        let (generator, first_token) = TokenGenerator::prefill(
             &mut model,
             &final_prompt,
             1024,
             state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
             state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
             &sampling_args,
-        )
-        .context("Failed to generate tokens")?;
+        )?;
+        println!("Prefill complete");
 
+        let subsequent_tokens: candle_core::Result<Vec<Tensor>> = generator.collect();
+        let mut all_tokens = vec![first_token];
+        all_tokens.extend(subsequent_tokens?);
+        println!("Tokens generated, length: {}", all_tokens.len());
+        let tokens = Tensor::cat(&all_tokens, D::Minus1)?;
         model.clear_slow_layer_caches();
+
         tokens
             .broadcast_sub(&Tensor::ones_like(&tokens).context("Failed to create ones tensor")?)
             .context("Failed to broadcast subtract")?

@@ -147,3 +147,117 @@ pub fn generate(
     );
     previous_tokens.i((1.., ..))
 }
+
+pub struct TokenGenerator<'a> {
+    model: &'a mut DualARTransformer,
+    logits_processor: LogitsProcessor,
+    rep_pens: Vec<RepPenProcessor>,
+    cur_token: Tensor,
+    previous_token: Vec<u32>,
+    input_pos: usize,
+    tokens_generated: usize,
+    max_new_tokens: usize,
+    im_end_id: u32,
+    pad_id: u32,
+}
+
+impl<'a> TokenGenerator<'a> {
+    pub fn prefill(
+        model: &'a mut DualARTransformer,
+        prompt: &Tensor,
+        max_new_tokens: usize,
+        im_end_id: u32,
+        pad_id: u32,
+        sampling_args: &SamplingArgs,
+    ) -> Result<(Self, Tensor)> {
+        let sampling = match sampling_args.temp {
+            0.0 => Sampling::ArgMax,
+            temp => Sampling::TopKThenTopP {
+                k: sampling_args.top_k,
+                p: sampling_args.top_p,
+                temperature: temp,
+            },
+        };
+        let mut logits_processor = LogitsProcessor::from_sampling(42, sampling);
+        // Penalties have to be separate per-codebook
+        let mut rep_pens: Vec<RepPenProcessor> = (0..model.cfg.num_codebooks)
+            .map(|_| {
+                RepPenProcessor::new(
+                    model.cfg.codebook_size,
+                    16, // yes, this is arbitrary, but the original authors did this too
+                    sampling_args.repetition_penalty,
+                    model.fast_embeddings.embeddings().dtype(),
+                    model.fast_embeddings.embeddings().device(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Prefill the first token.
+        // TODO: support speaker prompt caching!
+        let (previous_token, cur_token) = decode_one_token_ar(
+            model,
+            &mut logits_processor,
+            prompt,
+            0,
+            im_end_id,
+            pad_id,
+            None,
+            &mut rep_pens,
+        )?;
+
+        let input_pos = prompt.dim(D::Minus1)?;
+        let previous_tokens = cur_token.clone().i(1..)?;
+
+        Ok((
+            Self {
+                model,
+                logits_processor,
+                rep_pens,
+                cur_token,
+                previous_token,
+                input_pos,
+                tokens_generated: 0,
+                max_new_tokens,
+                im_end_id,
+                pad_id,
+            },
+            previous_tokens,
+        ))
+    }
+}
+
+impl<'a> Iterator for TokenGenerator<'a> {
+    type Item = Result<Tensor>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.tokens_generated >= self.max_new_tokens {
+            return None;
+        }
+
+        let result = decode_one_token_ar(
+            self.model,
+            &mut self.logits_processor,
+            &self.cur_token,
+            self.input_pos,
+            self.im_end_id,
+            self.pad_id,
+            Some(self.previous_token.clone()),
+            &mut self.rep_pens,
+        );
+        match result {
+            Ok((next_indices, next_token)) => {
+                if next_indices[0] == self.im_end_id {
+                    // Model predicted EOS, stop decoding
+                    return None;
+                }
+                self.tokens_generated += 1;
+                self.input_pos += 1;
+                self.cur_token = next_token.clone();
+                self.previous_token = next_indices;
+                // Drop text line
+                Some(next_token.i(1..))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
