@@ -91,3 +91,19 @@ impl OpusEncoder {
         Ok(output)
     }
 }
+
+pub fn resample_pcm(pcm_data: &[f32], ratio: f32) -> Vec<f32> {
+    (0..((pcm_data.len() as f32 / ratio) as usize))
+        .map(|i| {
+            let src_idx = i as f32 * ratio;
+            let src_idx_floor = src_idx.floor() as usize;
+            let src_idx_ceil = src_idx.ceil() as usize;
+            if src_idx_ceil >= pcm_data.len() {
+                pcm_data[src_idx_floor]
+            } else {
+                let t = src_idx - src_idx_floor as f32;
+                pcm_data[src_idx_floor] * (1.0 - t) + pcm_data[src_idx_ceil] * t
+            }
+        })
+        .collect()
+}

@@ -1,90 +1,46 @@
-use super::opus::OpusEncoder;
+use super::error::AppError;
+use super::generate::process_token_stream;
+use super::opus::{resample_pcm, OpusEncoder};
 use super::state::AppState;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
 use candle_core::{DType, Tensor, D};
 use fish_speech_core::audio::wav::write_pcm_as_wav;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_tokens_batch,
-    generate::TokenGenerator,
-    sample::SamplingArgs,
-    text::{preprocess_text, TextChunk},
+    encode::encode_tokens_batch, generate::TokenGenerator, sample::SamplingArgs,
+    text::preprocess_text,
 };
-use futures_util::Stream;
+use futures_util::pin_mut;
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// Custom error wrapper that holds anyhow::Error
-pub struct AppError(pub anyhow::Error);
-
-// Convert anyhow::Error into AppError
-impl<E> From<E> for AppError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
-}
-
-// Implement IntoResponse for AppError to convert errors into HTTP responses
-impl axum::response::IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        // Log the error with its full chain of causes
-        tracing::error!("Application error: {:#}", self.0);
-
-        // You can match on specific error types and return different status codes
-        let status = if self.0.downcast_ref::<std::io::Error>().is_some() {
-            StatusCode::INTERNAL_SERVER_ERROR
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-
-        // Return the error response
-        (status, format!("Something went wrong: {}", self.0)).into_response()
-    }
-}
+const MAX_CONTEXT: usize = 1024;
 
 async fn generate_pcm_chunk(
     state: &Arc<AppState>,
-    chunk: &TextChunk,
+    prompt: &Tensor,
     voice_embedding: &Tensor,
-    num_codebooks: usize,
+    sampling_args: &SamplingArgs,
 ) -> Result<Vec<f32>> {
-    let encoded_input = encode_tokens_batch(
-        &state.tokenizer,
-        vec![chunk.clone()],
-        &state.device,
-        None,
-        num_codebooks,
-    )
-    .context("Failed to encode tokens batch")?
-    .pop()
-    .ok_or_else(|| anyhow!("No encoded input generated"))?;
-
-    let final_prompt = Tensor::cat(&[voice_embedding, &encoded_input], D::Minus1)
+    let final_prompt = Tensor::cat(&[voice_embedding, &prompt], D::Minus1)
         .context("Failed to concatenate tensors")?;
-
-    let sampling_args = SamplingArgs {
-        temp: state.temp,
-        top_p: state.top_p,
-        top_k: 256,
-        repetition_penalty: 1.2,
-    };
 
     let semantic_tokens = {
         let mut model = state.semantic_model.lock().await;
+        let im_end_id = state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
+        let pad_id = state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
         // TODO: Actually take advantage of the iterator! for chunking
         let (generator, first_token) = TokenGenerator::prefill(
             &mut model,
             &final_prompt,
-            1024,
-            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
-            &sampling_args,
+            MAX_CONTEXT,
+            im_end_id,
+            pad_id,
+            sampling_args,
         )?;
         println!("Prefill complete");
 
@@ -109,6 +65,11 @@ async fn generate_pcm_chunk(
         &state.device,
     )
     .context("Failed to create feature lengths tensor")?;
+    println!(
+        "Final window : {:?}, feature lengths: {:?}",
+        semantic_tokens.to_vec2::<u32>().unwrap(),
+        feature_lengths
+    );
 
     let audio = vocoder
         .decode(
@@ -138,15 +99,15 @@ pub struct GenerateRequest {
     response_format: Option<String>,
 }
 
-async fn generate_speech_wav(
+async fn generate_speech_blocking(
     state: Arc<AppState>,
-    chunks: Vec<TextChunk>,
+    prompts: Vec<Tensor>,
     voice_embedding: &Tensor,
-    num_codebooks: usize,
+    sampling_args: &SamplingArgs,
 ) -> Result<Vec<u8>, AppError> {
     let mut all_pcm = Vec::new();
-    for chunk in chunks.iter() {
-        let pcm = generate_pcm_chunk(&state, chunk, &voice_embedding, num_codebooks).await?;
+    for prompt in prompts.iter() {
+        let pcm = generate_pcm_chunk(&state, prompt, &voice_embedding, sampling_args).await?;
         all_pcm.extend(pcm);
     }
 
@@ -155,13 +116,13 @@ async fn generate_speech_wav(
     Ok(audio_buf)
 }
 
-fn generate_speech_opus(
+/// BOXED AND PINNED
+fn generate_speech_streaming(
     state: Arc<AppState>,
+    prompts: Vec<Tensor>,
     voice_embedding: &Tensor,
-    chunks: Vec<TextChunk>,
-    num_codebooks: usize,
+    sampling_args: SamplingArgs,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
-    // BOXED AND PINNED
     const SRC_RATE: f32 = 44100.0;
     const DST_RATE: f32 = 24000.0;
 
@@ -177,41 +138,67 @@ fn generate_speech_opus(
         }
     };
 
-    let stream_state = state;
+    let stream_state = state.clone();
     let stream_embedding = voice_embedding.clone();
+    let im_end_id = stream_state
+        .tokenizer
+        .token_to_id("<|im_end|>")
+        .unwrap_or(4);
+    let pad_id = stream_state
+        .tokenizer
+        .token_to_id("<|semantic|>")
+        .unwrap_or(5);
 
-    Box::pin(async_stream::stream! {  // BOX PIN THIS SHIT
-        for chunk in chunks.iter() {
-            match generate_pcm_chunk(&stream_state, chunk, &stream_embedding, num_codebooks).await {
-                Ok(pcm_data) => {
-                    let ratio = SRC_RATE / DST_RATE;
-                    let resampled_pcm: Vec<f32> = (0..((pcm_data.len() as f32 / ratio) as usize))
-                        .map(|i| {
-                            let src_idx = i as f32 * ratio;
-                            let src_idx_floor = src_idx.floor() as usize;
-                            let src_idx_ceil = src_idx.ceil() as usize;
-                            if src_idx_ceil >= pcm_data.len() {
-                                pcm_data[src_idx_floor]
-                            } else {
-                                let t = src_idx - src_idx_floor as f32;
-                                pcm_data[src_idx_floor] * (1.0 - t) + pcm_data[src_idx_ceil] * t
-                            }
-                        })
-                        .collect();
+    Box::pin(async_stream::stream! {
+        for prompt in prompts.into_iter() {
+            // TODO: fix this
+            let final_prompt = Tensor::cat(&[stream_embedding.clone(), prompt.clone()], D::Minus1)
+                .context("Failed to concatenate tensors").unwrap();
 
-                    let mut encoder = encoder.lock().await;
-                    match encoder.encode_pcm(&resampled_pcm) {
-                        Ok(encoded) => {
-                            for chunk in encoded.chunks(1024) {
-                                yield Ok(Bytes::copy_from_slice(chunk));
+            let mut model = stream_state.semantic_model.lock().await;
+            let (generator, first_token) = TokenGenerator::prefill(
+                &mut model,
+                &final_prompt,
+                MAX_CONTEXT,
+                im_end_id,
+                pad_id,
+                &sampling_args,
+            ).map_err(|e| AppError(e.into()))?;
+            println!("Prefill complete");
+
+            // Set up windowed token stream
+            let token_stream = process_token_stream(
+                std::iter::once(Ok(first_token)).chain(generator),
+                stream_state.device.clone(),
+                stream_state.vocoder_model.clone()
+            );
+            pin_mut!(token_stream);
+            while let Some(audio_result) = token_stream.next().await {
+                match audio_result {
+                    Err(e) => yield Err(AppError(e.into()).into()),
+                    Ok(pcm_data) => {
+                        println!("Got here");
+                        let ratio = SRC_RATE / DST_RATE;
+                        let resampled_pcm = resample_pcm(&pcm_data, ratio);
+                        let mut encoder = encoder.lock().await;
+                        match encoder.encode_pcm(&resampled_pcm) {
+                            Err(e) => {
+                                println!("Failing chunk");
+                                yield Err(AppError(e.into()).into());
+                            },
+                            Ok(encoded) => {
+                                println!("Sending OGG chunk");
+                                for chunk in encoded.chunks(1024) {
+                                    yield Ok(Bytes::copy_from_slice(chunk));
+                                }
                             }
                         }
-                        Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
                     }
                 }
-                Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, format!("PCM generation failed: {}", e)))
             }
+            println!("Done with text chunk");
         }
+        println!("Done with core loop. Deadlock?");
     })
 }
 
@@ -232,9 +219,22 @@ pub async fn generate_speech(
     let state = state.clone();
     let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.input);
+    let encoded_input =
+        encode_tokens_batch(&state.tokenizer, chunks, &state.device, None, num_codebooks)?;
+    let sampling_args = SamplingArgs {
+        temp: state.temp,
+        top_p: state.top_p,
+        top_k: 256,
+        repetition_penalty: 1.2,
+    };
 
     if request.response_format == Some("opus".into()) {
-        let stream = generate_speech_opus(state, &voice_embedding, chunks, num_codebooks);
+        let stream = generate_speech_streaming(
+            state,
+            encoded_input,
+            &voice_embedding,
+            sampling_args.clone(),
+        );
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "audio/ogg")
@@ -242,7 +242,9 @@ pub async fn generate_speech(
             .body(Body::from_stream(stream))
             .context("Failed to build streaming response")?)
     } else {
-        let audio_buf = generate_speech_wav(state, chunks, &voice_embedding, num_codebooks).await?;
+        let audio_buf =
+            generate_speech_blocking(state, encoded_input, &voice_embedding, &sampling_args)
+                .await?;
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "audio/wav")

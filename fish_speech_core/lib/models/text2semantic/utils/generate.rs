@@ -152,6 +152,8 @@ impl<'a> Iterator for TokenGenerator<'a> {
             Ok((next_indices, next_token)) => {
                 if next_indices[0] == self.im_end_id {
                     // Model predicted EOS, stop decoding
+                    println!("clearing kv");
+                    self.model.clear_slow_layer_caches();
                     return None;
                 }
                 self.tokens_generated += 1;

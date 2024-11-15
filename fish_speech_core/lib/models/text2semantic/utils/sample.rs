@@ -113,6 +113,7 @@ pub fn load_prompt_texts(
     Ok(prompt_texts.into_iter().zip(codes?).collect())
 }
 
+#[derive(Clone)]
 pub struct SamplingArgs {
     pub temp: f64,
     pub top_p: f64,

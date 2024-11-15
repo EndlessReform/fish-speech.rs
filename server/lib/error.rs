@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use axum::{http::StatusCode, response::Response};
 use std::io;
 
@@ -11,13 +12,6 @@ where
 {
     fn from(err: E) -> Self {
         Self(err.into())
-    }
-}
-
-// Convert AppError into std::io::Error
-impl From<AppError> for io::Error {
-    fn from(err: AppError) -> Self {
-        io::Error::new(io::ErrorKind::Other, err.0.to_string())
     }
 }
 
@@ -36,5 +30,12 @@ impl axum::response::IntoResponse for AppError {
 
         // Return the error response
         (status, format!("Something went wrong: {}", self.0)).into_response()
+    }
+}
+
+// Convert AppError into std::io::Error
+impl From<AppError> for io::Error {
+    fn from(err: AppError) -> Self {
+        io::Error::new(io::ErrorKind::Other, err.0.to_string())
     }
 }
