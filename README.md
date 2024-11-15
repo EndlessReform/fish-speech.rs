@@ -20,11 +20,20 @@ Note that we don't support the official `.pth` weights.
 
 Nvidia GPU or Apple Silicon are highly recommended. CPU inference is supported as a fallback, but it's pretty slow. Please raise an issue if you want CPU accelerated.
 
-## Usage
 
-For now, we're keeping compatibility with the official Fish Speech inference CLI scripts. (Inference server and Python bindings coming soon!)
+## OpenAI-compatible server
+
+For macOS, install cmake beforehand:
+
+```bash
+brew install cmake
+```
+
+## CLI Usage
 
 ### Generate speaker conditioning tokens
+
+For now, we're keeping compatibility with the official Fish Speech inference CLI scripts. (Inference server and Python bindings coming soon!)
 
 ```bash
 # saves to fake.npy by default
@@ -55,13 +64,13 @@ For Fish 1.2, you'll have to specify version and checkpoint explicitly:
 cargo run --release --features metal --bin llama_generate -- --text "That is not dead which can eternal lie, and with strange aeons even death may die." --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
 ```
 
-For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.14135) support. 
+For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.14135) support.
 
 > [!WARNING]
-> 
-> The candle-flash-attention dependency [can take more than 10 minutes to compile](https://github.com/huggingface/candle/issues/2275) even on a good CPU, and can require more than 16 GB of memory! You have been warned. 
-> 
-> Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact. 
+>
+> The candle-flash-attention dependency [can take more than 10 minutes to compile](https://github.com/huggingface/candle/issues/2275) even on a good CPU, and can require more than 16 GB of memory! You have been warned.
+>
+> Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact.
 
 ```bash
 # Cache the Flash Attention build
@@ -122,7 +131,7 @@ Supported languages:
 - Korean (ko) ~20k hours
 - Arabic (ar) ~20k hours
 
-Please refer to [Fish Speech Github](https://github.com/fishaudio/fish-speech) for more info.  
+Please refer to [Fish Speech Github](https://github.com/fishaudio/fish-speech) for more info.
 Demo available at [Fish Audio](https://fish.audio/).
 
 ## Citation

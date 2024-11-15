@@ -6,6 +6,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
 /// Shared state between requests
+#[derive(Clone)]
 pub struct AppState {
     pub semantic_model: Arc<Mutex<DualARTransformer>>,
     pub vocoder_model: Arc<Mutex<FireflyDecoder>>,

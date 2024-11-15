@@ -11,7 +11,9 @@ use fish_speech_core::models::text2semantic::utils::{
     sample::SamplingArgs,
     text::{preprocess_text, TextChunk},
 };
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -136,6 +138,83 @@ pub struct GenerateRequest {
     response_format: Option<String>,
 }
 
+async fn generate_speech_wav(
+    state: Arc<AppState>,
+    chunks: Vec<TextChunk>,
+    voice_embedding: &Tensor,
+    num_codebooks: usize,
+) -> Result<Vec<u8>, AppError> {
+    let mut all_pcm = Vec::new();
+    for chunk in chunks.iter() {
+        let pcm = generate_pcm_chunk(&state, chunk, &voice_embedding, num_codebooks).await?;
+        all_pcm.extend(pcm);
+    }
+
+    let mut audio_buf = Vec::new();
+    write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100).context("Failed to write PCM as WAV")?;
+    Ok(audio_buf)
+}
+
+fn generate_speech_opus(
+    state: Arc<AppState>,
+    voice_embedding: &Tensor,
+    chunks: Vec<TextChunk>,
+    num_codebooks: usize,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    // BOXED AND PINNED
+    const SRC_RATE: f32 = 44100.0;
+    const DST_RATE: f32 = 24000.0;
+
+    let encoder = match OpusEncoder::new() {
+        Ok(enc) => Arc::new(Mutex::new(enc)),
+        Err(e) => {
+            return Box::pin(futures_util::stream::once(async move {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            }))
+        }
+    };
+
+    let stream_state = state;
+    let stream_embedding = voice_embedding.clone();
+
+    Box::pin(async_stream::stream! {  // BOX PIN THIS SHIT
+        for chunk in chunks.iter() {
+            match generate_pcm_chunk(&stream_state, chunk, &stream_embedding, num_codebooks).await {
+                Ok(pcm_data) => {
+                    let ratio = SRC_RATE / DST_RATE;
+                    let resampled_pcm: Vec<f32> = (0..((pcm_data.len() as f32 / ratio) as usize))
+                        .map(|i| {
+                            let src_idx = i as f32 * ratio;
+                            let src_idx_floor = src_idx.floor() as usize;
+                            let src_idx_ceil = src_idx.ceil() as usize;
+                            if src_idx_ceil >= pcm_data.len() {
+                                pcm_data[src_idx_floor]
+                            } else {
+                                let t = src_idx - src_idx_floor as f32;
+                                pcm_data[src_idx_floor] * (1.0 - t) + pcm_data[src_idx_ceil] * t
+                            }
+                        })
+                        .collect();
+
+                    let mut encoder = encoder.lock().await;
+                    match encoder.encode_pcm(&resampled_pcm) {
+                        Ok(encoded) => {
+                            for chunk in encoded.chunks(1024) {
+                                yield Ok(Bytes::copy_from_slice(chunk));
+                            }
+                        }
+                        Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    }
+                }
+                Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, format!("PCM generation failed: {}", e)))
+            }
+        }
+    })
+}
+
 #[derive(Debug, Serialize)]
 pub struct GenerateResponse {
     audio: Vec<f32>,
@@ -155,52 +234,7 @@ pub async fn generate_speech(
     let chunks = preprocess_text(&request.input);
 
     if request.response_format == Some("opus".into()) {
-        const SRC_RATE: f32 = 44100.0;
-        const DST_RATE: f32 = 24000.0;
-
-        // Move all stream setup before the stream definition
-        let encoder = Arc::new(Mutex::new(
-            OpusEncoder::new().context("Failed to create Opus encoder")?,
-        ));
-
-        // Create a single clone of everything the stream will need
-        let stream_state = state.clone();
-        let stream_embedding = voice_embedding.clone();
-
-        let stream = async_stream::stream! {
-            for chunk in chunks.iter() {
-                match generate_pcm_chunk(&stream_state, chunk, &stream_embedding, num_codebooks).await {
-                    Ok(pcm_data) => {
-                        let ratio = SRC_RATE / DST_RATE;
-                        let resampled_pcm: Vec<f32> = (0..((pcm_data.len() as f32 / ratio) as usize))
-                            .map(|i| {
-                                let src_idx = i as f32 * ratio;
-                                let src_idx_floor = src_idx.floor() as usize;
-                                let src_idx_ceil = src_idx.ceil() as usize;
-                                if src_idx_ceil >= pcm_data.len() {
-                                    pcm_data[src_idx_floor]
-                                } else {
-                                    let t = src_idx - src_idx_floor as f32;
-                                    pcm_data[src_idx_floor] * (1.0 - t) + pcm_data[src_idx_ceil] * t
-                                }
-                            })
-                            .collect();
-
-                        let mut encoder = encoder.lock().await;
-                        match encoder.encode_pcm(&resampled_pcm) {
-                            Ok(encoded) => {
-                                for chunk in encoded.chunks(1024) {
-                                    yield Ok(Bytes::copy_from_slice(chunk));
-                                }
-                            }
-                            Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-                        }
-                    }
-                    Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, format!("PCM generation failed: {}", e)))
-                }
-            }
-        };
-
+        let stream = generate_speech_opus(state, &voice_embedding, chunks, num_codebooks);
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "audio/ogg")
@@ -208,15 +242,7 @@ pub async fn generate_speech(
             .body(Body::from_stream(stream))
             .context("Failed to build streaming response")?)
     } else {
-        let mut all_pcm = Vec::new();
-        for chunk in chunks.iter() {
-            let pcm = generate_pcm_chunk(&state, chunk, &voice_embedding, num_codebooks).await?;
-            all_pcm.extend(pcm);
-        }
-
-        let mut audio_buf = Vec::new();
-        write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100).context("Failed to write PCM as WAV")?;
-
+        let audio_buf = generate_speech_wav(state, chunks, &voice_embedding, num_codebooks).await?;
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "audio/wav")

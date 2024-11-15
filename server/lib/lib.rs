@@ -1,3 +1,5 @@
+pub mod error;
+pub mod generate;
 pub mod handlers;
 pub mod opus;
 pub mod state;

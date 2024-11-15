@@ -52,102 +52,6 @@ fn decode_one_token_ar(
     Ok((codebooks, codes_tensor))
 }
 
-/// Takes a conditioning sequence as input and generates as many tokens as requested
-pub fn generate(
-    model: &mut DualARTransformer,
-    prompt: &Tensor,
-    max_new_tokens: usize,
-    im_end_id: u32,
-    pad_id: u32,
-    sampling_args: &SamplingArgs,
-) -> Result<Tensor> {
-    let sampling = match sampling_args.temp {
-        0.0 => Sampling::ArgMax,
-        temp => Sampling::TopKThenTopP {
-            temperature: temp,
-            p: sampling_args.top_p,
-            k: sampling_args.top_k,
-        },
-    };
-    let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
-    let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
-        .map(|_| {
-            RepPenProcessor::new(
-                model.cfg.codebook_size,
-                16,
-                sampling_args.repetition_penalty,
-                model.fast_embeddings.embeddings().dtype(),
-                model.fast_embeddings.embeddings().device(),
-            )
-        })
-        .collect();
-    let mut fast_rep_pens = maybe_fast_rep_pens?;
-
-    let start_pp = Instant::now();
-    let (mut previous_token, mut cur_token) = decode_one_token_ar(
-        model,
-        &mut fast_logits_processor,
-        prompt,
-        0,
-        im_end_id,
-        pad_id,
-        None,
-        &mut fast_rep_pens,
-    )?;
-    let dt = start_pp.elapsed();
-    let mut input_pos = prompt.dim(D::Minus1)?;
-    println!(
-        "{} prompt processing timesteps ({:.2} tokens/s)",
-        input_pos,
-        input_pos as f64 / dt.as_secs_f64()
-    );
-
-    let mut previous_tokens = cur_token.clone();
-
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg} [{elapsed_precise}] {per_sec} iterations/s")
-            .unwrap()
-            .tick_chars("/|\\- "),
-    );
-    spinner.enable_steady_tick(Duration::from_millis(100));
-    spinner.set_message("Generating features");
-
-    let start_decode = Instant::now();
-    for i in 1..max_new_tokens {
-        let (next_indices, next_token) = decode_one_token_ar(
-            model,
-            &mut fast_logits_processor,
-            &cur_token,
-            input_pos,
-            im_end_id,
-            pad_id,
-            Some(previous_token),
-            &mut fast_rep_pens,
-        )?;
-        previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
-        spinner.inc(1);
-        spinner.set_message(format!("Tokens: {}", i));
-        if next_indices[0] == im_end_id {
-            break;
-        }
-        input_pos += 1;
-        cur_token = next_token;
-        previous_token = next_indices;
-    }
-    let dt = start_decode.elapsed();
-    let out_len = previous_tokens.dim(1)? as f64;
-    println!(
-        "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
-        out_len,
-        out_len / dt.as_secs_f64(),
-        (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
-        (out_len / 21.535) / dt.as_secs_f64()
-    );
-    previous_tokens.i((1.., ..))
-}
-
 pub struct TokenGenerator<'a> {
     model: &'a mut DualARTransformer,
     logits_processor: LogitsProcessor,
@@ -260,4 +164,99 @@ impl<'a> Iterator for TokenGenerator<'a> {
             Err(e) => Some(Err(e)),
         }
     }
+}
+/// Takes a conditioning sequence as input and generates as many tokens as requested
+pub fn generate(
+    model: &mut DualARTransformer,
+    prompt: &Tensor,
+    max_new_tokens: usize,
+    im_end_id: u32,
+    pad_id: u32,
+    sampling_args: &SamplingArgs,
+) -> Result<Tensor> {
+    let sampling = match sampling_args.temp {
+        0.0 => Sampling::ArgMax,
+        temp => Sampling::TopKThenTopP {
+            temperature: temp,
+            p: sampling_args.top_p,
+            k: sampling_args.top_k,
+        },
+    };
+    let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
+    let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
+        .map(|_| {
+            RepPenProcessor::new(
+                model.cfg.codebook_size,
+                16,
+                sampling_args.repetition_penalty,
+                model.fast_embeddings.embeddings().dtype(),
+                model.fast_embeddings.embeddings().device(),
+            )
+        })
+        .collect();
+    let mut fast_rep_pens = maybe_fast_rep_pens?;
+
+    let start_pp = Instant::now();
+    let (mut previous_token, mut cur_token) = decode_one_token_ar(
+        model,
+        &mut fast_logits_processor,
+        prompt,
+        0,
+        im_end_id,
+        pad_id,
+        None,
+        &mut fast_rep_pens,
+    )?;
+    let dt = start_pp.elapsed();
+    let mut input_pos = prompt.dim(D::Minus1)?;
+    println!(
+        "{} prompt processing timesteps ({:.2} tokens/s)",
+        input_pos,
+        input_pos as f64 / dt.as_secs_f64()
+    );
+
+    let mut previous_tokens = cur_token.clone();
+
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg} [{elapsed_precise}] {per_sec} iterations/s")
+            .unwrap()
+            .tick_chars("/|\\- "),
+    );
+    spinner.enable_steady_tick(Duration::from_millis(100));
+    spinner.set_message("Generating features");
+
+    let start_decode = Instant::now();
+    for i in 1..max_new_tokens {
+        let (next_indices, next_token) = decode_one_token_ar(
+            model,
+            &mut fast_logits_processor,
+            &cur_token,
+            input_pos,
+            im_end_id,
+            pad_id,
+            Some(previous_token),
+            &mut fast_rep_pens,
+        )?;
+        previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
+        spinner.inc(1);
+        spinner.set_message(format!("Tokens: {}", i));
+        if next_indices[0] == im_end_id {
+            break;
+        }
+        input_pos += 1;
+        cur_token = next_token;
+        previous_token = next_indices;
+    }
+    let dt = start_decode.elapsed();
+    let out_len = previous_tokens.dim(1)? as f64;
+    println!(
+        "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
+        out_len,
+        out_len / dt.as_secs_f64(),
+        (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
+        (out_len / 21.535) / dt.as_secs_f64()
+    );
+    previous_tokens.i((1.., ..))
 }
