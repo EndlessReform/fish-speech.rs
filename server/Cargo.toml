@@ -21,7 +21,7 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 [dependencies]
 anyhow = "1.0.86"
 async-stream = "0.3.6"
-axum = "0.7.7"
+axum ={ version =  "0.7.7", features =["multipart"] }
 byteorder = "1.5.0"
 bytes = "1.8.0"
 candle-core = "0.7.2"
@@ -30,6 +30,7 @@ candle-gqa-ops = { git = "https://github.com/EndlessReform/candle-gqa-kernels.gi
 candle-nn = "0.7.2"
 candle-transformers = "0.7.2"
 clap = { version = "4.5.16", features = ["derive"] }
+futures = "0.3.31"
 futures-util = "0.3.31"
 hf-hub = "0.3.2"
 indicatif = "0.17.8"
@@ -43,6 +44,7 @@ rustfft = "6.2.0"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_json = "1.0.127"
 symphonia = "0.5.4"
+tempfile = "3.14.0"
 thiserror = "1.0.63"
 tokenizers = "0.20.0"
 tokio = {version = "1.41.1", features = ["full"] }
