@@ -1,4 +1,7 @@
 use candle_core::{Device, Tensor};
+use fish_speech_core::audio::spectrogram::LogMelSpectrogram;
+use fish_speech_core::models::text2semantic::BaseModelArgs;
+use fish_speech_core::models::vqgan::config::FireflyConfig;
 use fish_speech_core::models::{
     text2semantic::DualARTransformer, vqgan::decoder::FireflyDecoder,
     vqgan::encoder::FireflyEncoder,
@@ -13,6 +16,9 @@ pub struct AppState {
     pub semantic_model: Arc<Mutex<DualARTransformer>>,
     pub vocoder_model: Arc<FireflyDecoder>,
     pub encoder_model: Arc<FireflyEncoder>,
+    pub semantic_config: Arc<BaseModelArgs>,
+    pub firefly_config: Arc<FireflyConfig>,
+    pub spec_transform: Arc<LogMelSpectrogram>,
     pub tokenizer: Arc<Tokenizer>,
     pub device: Device,
     pub voices: Arc<HashMap<String, Tensor>>,

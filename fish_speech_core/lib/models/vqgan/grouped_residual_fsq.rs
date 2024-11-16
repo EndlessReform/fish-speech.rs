@@ -49,16 +49,26 @@ impl ResidualFSQ {
             )?);
         }
         let codebooks: Result<Vec<Tensor>> = layers.iter().map(|l| l.implicit_codebook()).collect();
-        let codebooks = Tensor::stack(&codebooks?, 0)?;
+        let codebooks = Tensor::stack(&codebooks?, 0)?.to_dtype(vb.dtype())?;
         let project_in = Linear::new(
             vb.pp("project_in")
-                .get((codebook_dim, config.dim), "weight")?,
-            vb.pp("project_in").get(codebook_dim, "bias").ok(),
+                .get((codebook_dim, config.dim), "weight")?
+                .to_dtype(candle_core::DType::F32)?
+                .contiguous()?,
+            vb.pp("project_in")
+                .get(codebook_dim, "bias")?
+                .to_dtype(candle_core::DType::F32)?
+                .contiguous()
+                .ok(),
         );
         let project_out = Linear::new(
             vb.pp("project_out")
-                .get((config.dim, codebook_dim), "weight")?,
-            vb.pp("project_out").get(config.dim, "bias").ok(),
+                .get((config.dim, codebook_dim), "weight")?
+                .to_dtype(candle_core::DType::F32)?,
+            vb.pp("project_out")
+                .get(config.dim, "bias")?
+                .to_dtype(candle_core::DType::F32)
+                .ok(),
         );
 
         Ok(ResidualFSQ {
@@ -73,7 +83,7 @@ impl ResidualFSQ {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
-        let x = self.project_in.forward(x)?;
+        let x = self.project_in.forward(&x.contiguous()?)?;
         let mut quantized_out = Tensor::zeros_like(&x)?;
         // Implicit first-step
         let mut residual = self.layers[0].bound(&x)?;
@@ -101,7 +111,9 @@ impl ResidualFSQ {
             1,
         )?;
         // let all_codes = self.codebooks.i(indices)?;
-        all_codes.broadcast_mul(&self.scales_tensor)
+        all_codes
+            .to_dtype(self.scales_tensor.dtype())?
+            .broadcast_mul(&self.scales_tensor)
     }
 
     pub fn get_output_from_indices(&self, indices: &Tensor) -> Result<Tensor> {

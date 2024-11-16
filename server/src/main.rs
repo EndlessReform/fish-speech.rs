@@ -1,16 +1,19 @@
-use axum::{routing::post, Router};
+use axum::{extract::DefaultBodyLimit, routing::post, Router};
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 use clap::Parser;
-use fish_speech_core::models::{
-    text2semantic::{BaseModelArgs, DualARTransformer},
-    vqgan::{
-        config::{FireflyConfig, WhichModel},
-        decoder::FireflyDecoder,
-        encoder::FireflyEncoder,
+use fish_speech_core::{
+    audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
+    models::{
+        text2semantic::{BaseModelArgs, DualARTransformer},
+        vqgan::{
+            config::{FireflyConfig, WhichModel},
+            decoder::FireflyDecoder,
+            encoder::FireflyEncoder,
+        },
     },
 };
-use server::handlers::generate_speech;
+use server::handlers::{encode_speech::encode_speaker, speech::generate_speech};
 use server::load_speaker_prompts;
 use server::state::AppState;
 use std::path::PathBuf;
@@ -62,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     let device = Device::Cpu;
 
     let checkpoint_dir = args.checkpoint.canonicalize().unwrap();
-    let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
+    let semantic_config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Arc::new(Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap());
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]
@@ -107,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
     let semantic_model = Arc::new(Mutex::new(DualARTransformer::load(
         &vb_lm,
-        &config,
+        &semantic_config,
         semantic_token_id as i64,
     )?));
     let vocoder_model = Arc::new(FireflyDecoder::load(
@@ -121,16 +124,24 @@ async fn main() -> anyhow::Result<()> {
         &args.fish_version,
     )?);
     let dt = start_load.elapsed();
+    let spec_transform = Arc::new(LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?);
     println!("Models loaded in {:.2}s", dt.as_secs_f64());
     // Load all voices into memory
-    let (speakers, default_speaker) =
-        load_speaker_prompts(&args.voice_dir, &tokenizer, &device, config.num_codebooks)?;
+    let (speakers, default_speaker) = load_speaker_prompts(
+        &args.voice_dir,
+        &tokenizer,
+        &device,
+        semantic_config.num_codebooks,
+    )?;
     println!("Loaded {} voices", speakers.len());
 
     let state = Arc::new(AppState {
         semantic_model,
         vocoder_model,
         encoder_model,
+        semantic_config: Arc::new(semantic_config),
+        firefly_config: Arc::new(firefly_config),
+        spec_transform,
         tokenizer,
         device,
         voices: Arc::new(speakers),
@@ -142,6 +153,8 @@ async fn main() -> anyhow::Result<()> {
     // Create router
     let app = Router::new()
         .route("/v1/audio/speech", post(generate_speech))
+        .route("/v1/audio/encoding", post(encode_speaker))
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 
     // Run server

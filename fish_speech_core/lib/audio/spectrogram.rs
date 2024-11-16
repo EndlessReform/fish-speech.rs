@@ -142,7 +142,7 @@ impl LogMelSpectrogram {
     fn apply_mel_scale(&self, x: &Tensor) -> CandleResult<Tensor> {
         let x = x
             .transpose(D::Minus1, D::Minus1)?
-            .matmul(&self.mel_buffer)?;
+            .matmul(&self.mel_buffer.to_device(x.device())?)?;
         x.transpose(D::Minus1, D::Minus2)
     }
 

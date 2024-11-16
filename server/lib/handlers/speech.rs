@@ -1,5 +1,6 @@
-use super::opus::OpusEncoder;
-use super::state::AppState;
+use super::error::AppError;
+use crate::opus::OpusEncoder;
+use crate::state::AppState;
 use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
@@ -11,37 +12,6 @@ use fish_speech_core::models::text2semantic::utils::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-// Custom error wrapper that holds anyhow::Error
-pub struct AppError(pub anyhow::Error);
-
-// Convert anyhow::Error into AppError
-impl<E> From<E> for AppError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
-}
-
-// Implement IntoResponse for AppError to convert errors into HTTP responses
-impl axum::response::IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        // Log the error with its full chain of causes
-        tracing::error!("Application error: {:#}", self.0);
-
-        // You can match on specific error types and return different status codes
-        let status = if self.0.downcast_ref::<std::io::Error>().is_some() {
-            StatusCode::INTERNAL_SERVER_ERROR
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-
-        // Return the error response
-        (status, format!("Something went wrong: {}", self.0)).into_response()
-    }
-}
 
 async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Result<Vec<f32>> {
     let sampling_args = SamplingArgs {
