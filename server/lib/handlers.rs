@@ -1,15 +1,12 @@
 use super::opus::OpusEncoder;
 use super::state::AppState;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
 use candle_core::{DType, Tensor, D};
 use fish_speech_core::audio::wav::write_pcm_as_wav;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_tokens_batch,
-    generate::generate,
-    sample::SamplingArgs,
-    text::{preprocess_text, TextChunk},
+    encode::encode_chunks, generate::generate, sample::SamplingArgs, text::preprocess_text,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -46,26 +43,7 @@ impl axum::response::IntoResponse for AppError {
     }
 }
 
-async fn generate_pcm_chunk(
-    state: &Arc<AppState>,
-    chunk: &TextChunk,
-    voice_embedding: &Tensor,
-    num_codebooks: usize,
-) -> Result<Vec<f32>> {
-    let encoded_input = encode_tokens_batch(
-        &state.tokenizer,
-        vec![chunk.clone()],
-        &state.device,
-        None,
-        num_codebooks,
-    )
-    .context("Failed to encode tokens batch")?
-    .pop()
-    .ok_or_else(|| anyhow!("No encoded input generated"))?;
-
-    let final_prompt = Tensor::cat(&[voice_embedding, &encoded_input], D::Minus1)
-        .context("Failed to concatenate tensors")?;
-
+async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Result<Vec<f32>> {
     let sampling_args = SamplingArgs {
         temp: state.temp,
         top_p: state.top_p,
@@ -77,7 +55,7 @@ async fn generate_pcm_chunk(
         let mut model = state.semantic_model.lock().await;
         let tokens = generate(
             &mut model,
-            &final_prompt,
+            &encoded_input,
             1024,
             state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
             state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
@@ -146,6 +124,13 @@ pub async fn generate_speech(
     let state = state.clone();
     let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.input);
+    let prompts = encode_chunks(
+        &state.tokenizer,
+        chunks,
+        &state.device,
+        Some(&voice_embedding),
+        num_codebooks,
+    )?;
 
     if request.response_format == Some("opus".into()) {
         const SRC_RATE: f32 = 44100.0;
@@ -158,11 +143,10 @@ pub async fn generate_speech(
 
         // Create a single clone of everything the stream will need
         let stream_state = state.clone();
-        let stream_embedding = voice_embedding.clone();
 
         let stream = async_stream::stream! {
-            for chunk in chunks.iter() {
-                match generate_pcm_chunk(&stream_state, chunk, &stream_embedding, num_codebooks).await {
+            for prompt in prompts.iter() {
+                match generate_pcm_chunk(&stream_state, prompt).await {
                     Ok(pcm_data) => {
                         let ratio = SRC_RATE / DST_RATE;
                         let resampled_pcm: Vec<f32> = (0..((pcm_data.len() as f32 / ratio) as usize))
@@ -202,8 +186,8 @@ pub async fn generate_speech(
             .context("Failed to build streaming response")?)
     } else {
         let mut all_pcm = Vec::new();
-        for chunk in chunks.iter() {
-            let pcm = generate_pcm_chunk(&state, chunk, &voice_embedding, num_codebooks).await?;
+        for prompt in prompts.iter() {
+            let pcm = generate_pcm_chunk(&state, prompt).await?;
             all_pcm.extend(pcm);
         }
 
