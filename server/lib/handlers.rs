@@ -69,7 +69,7 @@ async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Re
             .context("Failed to broadcast subtract")?
     };
 
-    let vocoder = state.vocoder_model.lock().await;
+    let vocoder = state.vocoder_model.clone();
     let feature_lengths = Tensor::from_slice(
         &[semantic_tokens
             .dim(D::Minus1)

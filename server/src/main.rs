@@ -4,7 +4,11 @@ use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::models::{
     text2semantic::{BaseModelArgs, DualARTransformer},
-    vqgan::{config::FireflyConfig, config::WhichModel, decoder::FireflyDecoder},
+    vqgan::{
+        config::{FireflyConfig, WhichModel},
+        decoder::FireflyDecoder,
+        encoder::FireflyEncoder,
+    },
 };
 use server::handlers::generate_speech;
 use server::load_speaker_prompts;
@@ -78,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
         },
         _ => VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?,
     };
-    let vb_vocoder = match args.fish_version {
+    let vb_firefly = match args.fish_version {
         WhichModel::Fish1_4 => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[args
@@ -95,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
             &device,
         )?,
     };
-    let vocoder_config = match args.fish_version {
+    let firefly_config = match args.fish_version {
         WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
         _ => FireflyConfig::fish_speech_1_4(),
     };
@@ -106,11 +110,16 @@ async fn main() -> anyhow::Result<()> {
         &config,
         semantic_token_id as i64,
     )?));
-    let vocoder_model = Arc::new(Mutex::new(FireflyDecoder::load(
-        &vb_vocoder,
-        &vocoder_config,
+    let vocoder_model = Arc::new(FireflyDecoder::load(
+        &vb_firefly,
+        &firefly_config,
         &args.fish_version,
-    )?));
+    )?);
+    let encoder_model = Arc::new(FireflyEncoder::load(
+        vb_firefly.clone(),
+        &firefly_config,
+        &args.fish_version,
+    )?);
     let dt = start_load.elapsed();
     println!("Models loaded in {:.2}s", dt.as_secs_f64());
     // Load all voices into memory
@@ -121,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         semantic_model,
         vocoder_model,
+        encoder_model,
         tokenizer,
         device,
         voices: Arc::new(speakers),

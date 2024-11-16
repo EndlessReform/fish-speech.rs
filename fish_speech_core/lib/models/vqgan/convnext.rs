@@ -1,6 +1,9 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
-use super::{config::WhichModel, utils::FishConvNet};
+use super::{
+    config::{FireflyConfig, WhichModel},
+    utils::FishConvNet,
+};
 use candle_core::{Error, Result, Tensor};
 use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
@@ -176,9 +179,116 @@ impl Default for ConvNeXtEncoderConfig {
     }
 }
 
+pub struct StemLayer {
+    conv: FishConvNet,
+    norm: LayerNormChannelsFirst,
+    blocks: Vec<ConvNeXtBlock>,
+}
+
+impl StemLayer {
+    pub fn load(
+        vb: VarBuilder,
+        config: &ConvNeXtEncoderConfig,
+        model: &WhichModel,
+    ) -> Result<Self> {
+        let vb_ds = vb.pp("downsample_layers");
+        let conv = FishConvNet::load(
+            vb_ds.pp("0.0"),
+            config.input_channels,
+            config.dims[0],
+            config.kernel_size,
+            Conv1dConfig {
+                padding: match model {
+                    WhichModel::Fish1_2 => config.kernel_size / 2,
+                    _ => 0,
+                },
+                ..Default::default()
+            },
+            model,
+        )?;
+        let norm = LayerNormChannelsFirst::load(vb_ds.pp("0.1"), config.dims[0])?;
+        let blocks: Result<Vec<ConvNeXtBlock>> = (0..config.depths[0])
+            .map(|j| {
+                ConvNeXtBlock::load(
+                    vb.pp(format!("stages.{}.{}", 0, j)),
+                    &ConvNeXtBlockConfig::with_dim(config.dims[0]),
+                    model,
+                )
+            })
+            .collect();
+        Ok(Self {
+            conv,
+            norm,
+            blocks: blocks?,
+        })
+    }
+}
+impl Module for StemLayer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let x = self.conv.forward(xs)?;
+        let norm = self.norm.forward(&x);
+        let out = self
+            .blocks
+            .iter()
+            .try_fold(norm, |acc, block| acc.map(|x| block.forward(&x)))?;
+        out
+    }
+}
+
+pub struct MidLayer {
+    norm: LayerNormChannelsFirst,
+    conv: Conv1d,
+    blocks: Vec<ConvNeXtBlock>,
+}
+
+impl MidLayer {
+    pub fn load(
+        vb: VarBuilder,
+        config: &ConvNeXtEncoderConfig,
+        model: &WhichModel,
+        idx: usize,
+    ) -> Result<Self> {
+        let vb_stem = vb.pp(format!("downsample_layers.{}", idx));
+        let norm = LayerNormChannelsFirst::load(vb_stem.pp("0"), config.dims[idx - 1])?;
+        let conv = Conv1d::new(
+            vb_stem.get((config.dims[idx], config.dims[idx - 1], 1), "1.weight")?,
+            Some(vb_stem.get(config.dims[idx], "1.bias")?),
+            Conv1dConfig {
+                ..Default::default()
+            },
+        );
+        let blocks: Result<Vec<ConvNeXtBlock>> = (0..config.depths[idx])
+            .map(|j| {
+                ConvNeXtBlock::load(
+                    vb.pp(format!("stages.{}.{}", idx, j)),
+                    &ConvNeXtBlockConfig::with_dim(config.dims[idx]),
+                    model,
+                )
+            })
+            .collect();
+        Ok(Self {
+            norm,
+            conv,
+            blocks: blocks?,
+        })
+    }
+}
+
+impl Module for MidLayer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let norm = self.norm.forward(&xs)?;
+        let maybe_conv = self.conv.forward(&norm);
+        let out = self
+            .blocks
+            .iter()
+            .try_fold(maybe_conv, |acc, block| acc.map(|acc| block.forward(&acc)))?;
+        out
+    }
+}
+
 pub struct ConvNeXtEncoder {
-    downsample_layers: Vec<Box<dyn Module>>,
-    stages: Vec<Box<dyn Module>>,
+    stem_layer: StemLayer,
+    mid_layers: Vec<MidLayer>,
     norm: LayerNormChannelsFirst,
 }
 
@@ -197,71 +307,18 @@ impl ConvNeXtEncoder {
         } else if config.depths.is_empty() {
             return Err(Error::debug("ConvNeXtEncoder depth cannot be 0"));
         };
-        let vb_ds = vb.pp("downsample_layers");
+        let stem_layer = StemLayer::load(vb.clone(), config, model)?;
+        let mid_layers: Result<Vec<MidLayer>> = (1..config.depths.len())
+            .map(|idx| MidLayer::load(vb.clone(), config, model, idx))
+            .collect();
 
-        let stem = seq();
-        let stem = stem.add(FishConvNet::load(
-            vb_ds.pp("0.0"),
-            config.input_channels,
-            config.dims[0],
-            config.kernel_size,
-            Conv1dConfig {
-                padding: match model {
-                    WhichModel::Fish1_2 => config.kernel_size / 2,
-                    _ => 0,
-                },
-                ..Default::default()
-            },
-            model,
-        )?);
-        let stem = stem.add(LayerNormChannelsFirst::load(
-            vb_ds.pp("0.1"),
-            config.dims[0],
-        )?);
-        let mut downsample_layers: Vec<Box<dyn Module>> = vec![Box::new(stem)];
-
-        for idx in 1..config.depths.len() {
-            let vb_stem = vb_ds.pp(format!("{}", idx));
-            let mid_layer = seq();
-            let mid_layer = mid_layer.add(LayerNormChannelsFirst::load(
-                vb_stem.pp("0"),
-                config.dims[idx - 1],
-            )?);
-
-            let mid_layer = mid_layer.add(Conv1d::new(
-                vb_stem.get((config.dims[idx], config.dims[idx - 1], 1), "1.weight")?,
-                Some(vb_stem.get(config.dims[idx], "1.bias")?),
-                Conv1dConfig {
-                    ..Default::default()
-                },
-            ));
-            downsample_layers.push(Box::new(mid_layer));
-        }
-
-        let mut stages: Vec<Box<dyn Module>> = Vec::new();
-        for idx in 0..config.depths.len() {
-            let mut stage = seq();
-            let blocks: Result<Vec<ConvNeXtBlock>> = (0..config.depths[idx])
-                .map(|j| {
-                    ConvNeXtBlock::load(
-                        vb.pp(format!("stages.{}.{}", idx, j)),
-                        &ConvNeXtBlockConfig::with_dim(config.dims[idx]),
-                        model,
-                    )
-                })
-                .collect();
-            for block in blocks? {
-                stage = stage.add(block);
-            }
-            stages.push(Box::new(stage));
-        }
-
+        let mid_layers = mid_layers?;
         // We can unwrap since we already did the bounds check
         let norm = LayerNormChannelsFirst::load(vb.pp("norm"), *config.dims.last().unwrap())?;
 
         Ok(Self {
-            downsample_layers,
-            stages,
+            stem_layer,
+            mid_layers,
             norm,
         })
     }
@@ -269,12 +326,12 @@ impl ConvNeXtEncoder {
 
 impl Module for ConvNeXtEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut x = xs.to_owned();
-        for (downsampler, block) in self.downsample_layers.iter().zip(self.stages.iter()) {
-            x = downsampler.forward(&x)?;
-            x = block.forward(&x)?;
-        }
-        x = self.norm.forward(&x)?;
-        Ok(x)
+        let x = self.stem_layer.forward(xs);
+        let x = self
+            .mid_layers
+            .iter()
+            .try_fold(x, |acc, layer| acc.map(|x| layer.forward(&x)))?;
+        let x = self.norm.forward(&(x?));
+        x
     }
 }
