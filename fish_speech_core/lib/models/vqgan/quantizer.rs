@@ -2,7 +2,7 @@ use super::config::{DownsampleFSQConfig, WhichModel};
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
 use super::utils::{FishConvNet, FishTransConvNet};
-use candle_core::{DType, Result, Tensor};
+use candle_core::{Result, Tensor};
 use candle_nn::{Conv1dConfig, ConvTranspose1dConfig, Module, VarBuilder};
 
 pub struct DownsampleFiniteScalarQuantizer {
@@ -10,7 +10,6 @@ pub struct DownsampleFiniteScalarQuantizer {
     upsample_layers: Vec<(FishTransConvNet, ConvNeXtBlock)>,
     residual_fsq: GroupedResidualFSQ,
     pub downsample_factor: Vec<usize>,
-    dtype: DType,
 }
 
 impl DownsampleFiniteScalarQuantizer {
@@ -94,7 +93,6 @@ impl DownsampleFiniteScalarQuantizer {
             downsample_layers,
             upsample_layers,
             downsample_factor: config.downsample_factor.clone(),
-            dtype: vb.dtype(),
         })
     }
 
@@ -107,10 +105,7 @@ impl DownsampleFiniteScalarQuantizer {
         }
 
         // Transpose z (equivalent to .mT in Python)
-        let z_t = z
-            .transpose(1, 2)?
-            .to_dtype(candle_core::DType::F32)?
-            .contiguous()?;
+        let z_t = z.transpose(1, 2)?;
 
         // Apply residual_fsq
         let (_codes, indices) = self.residual_fsq.forward(&z_t)?;
@@ -141,10 +136,7 @@ impl DownsampleFiniteScalarQuantizer {
             l,
             gr / self.residual_fsq.groups,
         ))?;
-        let z_q = self
-            .residual_fsq
-            .get_output_from_indices(&indices)?
-            .to_dtype(self.dtype)?;
+        let z_q = self.residual_fsq.get_output_from_indices(&indices)?;
         self.upsample(&z_q.transpose(1, 2)?)
     }
 }

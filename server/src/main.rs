@@ -102,6 +102,23 @@ async fn main() -> anyhow::Result<()> {
             &device,
         )?,
     };
+    let vb_encoder = match args.fish_version {
+        WhichModel::Fish1_4 => unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[args
+                    .checkpoint
+                    .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
+                DType::F32,
+                &device,
+            )?
+        },
+        WhichModel::Fish1_2 => VarBuilder::from_pth(
+            args.checkpoint
+                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
+            DType::F32,
+            &device,
+        )?,
+    };
     let firefly_config = match args.fish_version {
         WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
         _ => FireflyConfig::fish_speech_1_4(),
@@ -119,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
         &args.fish_version,
     )?);
     let encoder_model = Arc::new(FireflyEncoder::load(
-        vb_firefly.clone(),
+        vb_encoder.clone(),
         &firefly_config,
         &args.fish_version,
     )?);

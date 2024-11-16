@@ -56,10 +56,7 @@ pub async fn encode_speaker(
     )?
     .unsqueeze(0)?;
 
-    let mels = state
-        .spec_transform
-        .forward(&audio)?
-        .to_device(&state.device)?;
+    let mels = state.spec_transform.forward(&audio)?;
 
     let start_encode = Instant::now();
     let result = state.encoder_model.encode(&mels)?.squeeze(0)?;
