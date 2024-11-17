@@ -5,6 +5,7 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
 
+/// (codes, codebook tensor, hidden states)
 fn decode_one_token_ar(
     model: &mut DualARTransformer,
     fast_logits_processor: &mut LogitsProcessor,
@@ -14,7 +15,7 @@ fn decode_one_token_ar(
     pad_id: u32,
     previous_token: Option<Vec<u32>>,
     rep_pens: &mut [RepPenProcessor],
-) -> Result<(Vec<u32>, Tensor)> {
+) -> Result<(Vec<u32>, Tensor, Tensor)> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
 
@@ -31,7 +32,7 @@ fn decode_one_token_ar(
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 
-    let mut x = hidden_states;
+    let mut x = hidden_states.clone();
     for codebook_idx in 0..model.cfg.num_codebooks {
         let logits = model
             .forward_generate_fast(&x, codebook_idx)?
@@ -49,7 +50,7 @@ fn decode_one_token_ar(
     let codes_tensor =
         Tensor::from_vec(codebooks.clone(), model.cfg.num_codebooks + 1, x.device())?
             .unsqueeze(D::Minus1)?;
-    Ok((codebooks, codes_tensor))
+    Ok((codebooks, codes_tensor, hidden_states))
 }
 
 /// Takes a conditioning sequence as input and generates as many tokens as requested
@@ -60,7 +61,8 @@ pub fn generate(
     im_end_id: u32,
     pad_id: u32,
     sampling_args: &SamplingArgs,
-) -> Result<Tensor> {
+    collect_hidden_states: bool,
+) -> Result<(Tensor, Option<Tensor>)> {
     let sampling = match sampling_args.temp {
         0.0 => Sampling::ArgMax,
         temp => Sampling::TopKThenTopP {
@@ -84,7 +86,7 @@ pub fn generate(
     let mut fast_rep_pens = maybe_fast_rep_pens?;
 
     let start_pp = Instant::now();
-    let (mut previous_token, mut cur_token) = decode_one_token_ar(
+    let (mut previous_token, mut cur_token, hidden_state_first) = decode_one_token_ar(
         model,
         &mut fast_logits_processor,
         prompt,
@@ -113,10 +115,11 @@ pub fn generate(
     );
     spinner.enable_steady_tick(Duration::from_millis(100));
     spinner.set_message("Generating features");
+    let mut hidden_states: Vec<Tensor> = vec![hidden_state_first];
 
     let start_decode = Instant::now();
     for i in 1..max_new_tokens {
-        let (next_indices, next_token) = decode_one_token_ar(
+        let (next_indices, next_token, hidden_state) = decode_one_token_ar(
             model,
             &mut fast_logits_processor,
             &cur_token,
@@ -126,6 +129,9 @@ pub fn generate(
             Some(previous_token),
             &mut fast_rep_pens,
         )?;
+        if collect_hidden_states {
+            hidden_states.push(hidden_state);
+        }
         previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
@@ -138,6 +144,10 @@ pub fn generate(
     }
     let dt = start_decode.elapsed();
     let out_len = previous_tokens.dim(1)? as f64;
+    let hidden_states = match collect_hidden_states {
+        true => Tensor::cat(&hidden_states, 0).ok(),
+        false => None,
+    };
     println!(
         "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
@@ -145,5 +155,5 @@ pub fn generate(
         (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
         (out_len / 21.535) / dt.as_secs_f64()
     );
-    previous_tokens.i((1.., ..))
+    Ok((previous_tokens.i((1.., ..))?, hidden_states))
 }

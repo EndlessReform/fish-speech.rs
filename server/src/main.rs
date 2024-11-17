@@ -13,7 +13,10 @@ use fish_speech_core::{
         },
     },
 };
-use server::handlers::{encode_speech::encode_speaker, speech::generate_speech};
+use server::handlers::{
+    encode_speech::encode_speaker, send_hidden_states::generate_hidden_states,
+    speech::generate_speech,
+};
 use server::load_speaker_prompts;
 use server::state::AppState;
 use std::path::PathBuf;
@@ -170,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
     // Create router
     let app = Router::new()
         .route("/v1/audio/speech", post(generate_speech))
+        .route("/v1/audio/speech/hidden", post(generate_hidden_states))
         .route("/v1/audio/encoding", post(encode_speaker))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);

@@ -13,25 +13,34 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Result<Vec<f32>> {
+pub async fn generate_pcm_chunk(
+    state: &Arc<AppState>,
+    encoded_input: &Tensor,
+    collect_hidden_states: bool,
+) -> Result<(Vec<f32>, Option<Tensor>)> {
     let sampling_args = SamplingArgs {
         temp: state.temp,
         top_p: state.top_p,
         top_k: 256,
         repetition_penalty: 1.2,
     };
+    let mut hidden_states: Option<Tensor> = None;
 
     let semantic_tokens = {
         let mut model = state.semantic_model.lock().await;
-        let tokens = generate(
+        let (tokens, maybe_hidden_states) = generate(
             &mut model,
             &encoded_input,
             1024,
             state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
             state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
             &sampling_args,
+            collect_hidden_states,
         )
         .context("Failed to generate tokens")?;
+        if collect_hidden_states {
+            hidden_states = maybe_hidden_states;
+        };
 
         model.clear_slow_layer_caches();
         tokens
@@ -66,7 +75,7 @@ async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Re
         .to_vec1()
         .context("Failed to convert to vec")?;
 
-    Ok(audio)
+    Ok((audio, hidden_states))
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,8 +125,8 @@ pub async fn generate_speech(
 
         let stream = async_stream::stream! {
             for prompt in prompts.iter() {
-                match generate_pcm_chunk(&stream_state, prompt).await {
-                    Ok(pcm_data) => {
+                match generate_pcm_chunk(&stream_state, prompt, false).await {
+                    Ok((pcm_data, _)) => {
                         let ratio = SRC_RATE / DST_RATE;
                         let resampled_pcm: Vec<f32> = (0..((pcm_data.len() as f32 / ratio) as usize))
                             .map(|i| {
@@ -157,7 +166,7 @@ pub async fn generate_speech(
     } else {
         let mut all_pcm = Vec::new();
         for prompt in prompts.iter() {
-            let pcm = generate_pcm_chunk(&state, prompt).await?;
+            let (pcm, _) = generate_pcm_chunk(&state, prompt, false).await?;
             all_pcm.extend(pcm);
         }
 
