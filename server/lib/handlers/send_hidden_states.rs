@@ -47,7 +47,8 @@ pub async fn generate_hidden_states(
     for prompt in prompts.iter() {
         let (pcm, maybe_hidden) = generate_pcm_chunk(&state, prompt, true).await?;
         if let Some(hidden) = maybe_hidden {
-            all_hidden_states.push(hidden);
+            // println!("{:?} maybe?", hidden.squeeze(1)?.shape());
+            all_hidden_states.push(hidden.squeeze(1)?);
         }
         if request.return_audio {
             all_pcm.extend(pcm);
