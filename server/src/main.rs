@@ -5,7 +5,7 @@ use clap::Parser;
 use fish_speech_core::{
     audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
     models::{
-        text2semantic::{BaseModelArgs, DualARTransformer},
+        text2semantic::{silence_detector::PauseTypeProbe, BaseModelArgs, DualARTransformer},
         vqgan::{
             config::{FireflyConfig, WhichModel},
             decoder::FireflyDecoder,
@@ -52,6 +52,10 @@ struct Args {
     /// Top-p (nucleus) sampling threshold
     #[arg(long, default_value = "0.8")]
     top_p: f64,
+
+    /// Enable neural silence detection (requires silence_probe.safetensors)
+    #[arg(long)]
+    enable_silence_detection: bool,
 }
 
 #[tokio::main]
@@ -143,6 +147,35 @@ async fn main() -> anyhow::Result<()> {
         &firefly_config,
         &args.fish_version,
     )?);
+    let silence_probe = if args.enable_silence_detection {
+        let probe_path = checkpoint_dir.join("silence_probe.safetensors");
+        if probe_path.exists() {
+            match unsafe { VarBuilder::from_mmaped_safetensors(&[probe_path], dtype, &device) } {
+                Ok(vb) => match PauseTypeProbe::load(&vb, semantic_config.dim, 0.5) {
+                    Ok(probe) => {
+                        println!("Loaded silence detection probe");
+                        Some(Arc::new(probe))
+                    }
+                    Err(e) => {
+                        println!("Failed to load silence probe: {}", e);
+                        None
+                    }
+                },
+                Err(e) => {
+                    println!("Failed to load silence probe weights: {}", e);
+                    None
+                }
+            }
+        } else {
+            println!(
+                "Silence probe file not found at {:?}, continuing without",
+                probe_path
+            );
+            None
+        }
+    } else {
+        None
+    };
     let dt = start_load.elapsed();
     let spec_transform = Arc::new(LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?);
     println!("Models loaded in {:.2}s", dt.as_secs_f64());
@@ -159,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
         semantic_model,
         vocoder_model,
         encoder_model,
+        silence_probe,
         semantic_config: Arc::new(semantic_config),
         firefly_config: Arc::new(firefly_config),
         spec_transform,
@@ -170,7 +204,11 @@ async fn main() -> anyhow::Result<()> {
         top_p: args.top_p,
     });
 
-    // Create router
+    let addr = format!("0.0.0.0:{}", args.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+
+    println!("Listening on {}", addr);
+
     let app = Router::new()
         .route("/v1/audio/speech", post(generate_speech))
         .route("/v1/audio/speech/hidden", post(generate_hidden_states))
@@ -178,10 +216,8 @@ async fn main() -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 
-    // Run server
-    let addr = format!("0.0.0.0:{}", args.port);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-
+    axum::serve(listener, app.into_make_service())
+        .tcp_nodelay(true)
+        .await?;
     Ok(())
 }

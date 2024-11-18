@@ -1,12 +1,12 @@
 use super::error::AppError;
-use super::speech::generate_pcm_chunk;
+use super::speech::{generate_semantic_tokens, vocode_semantic_tokens};
 use crate::state::AppState;
 use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks, text::preprocess_text,
+    encode::encode_chunks, sample::SamplingArgs, text::preprocess_text,
 };
 use serde::Deserialize;
 use std::io::{Cursor, Write};
@@ -44,8 +44,17 @@ pub async fn generate_hidden_states(
     let mut all_hidden_states = Vec::new();
     let mut all_pcm = Vec::new();
 
+    // Non-streaming path stays relatively simple
+    let sampling_args = SamplingArgs {
+        temp: state.temp,
+        top_p: state.top_p,
+        top_k: 256,
+        repetition_penalty: 1.2,
+    };
     for prompt in prompts.iter() {
-        let (pcm, maybe_hidden) = generate_pcm_chunk(&state, prompt, true).await?;
+        let (semantic_tokens, maybe_hidden) =
+            generate_semantic_tokens(&state, prompt, &sampling_args, true).await?;
+        let pcm = vocode_semantic_tokens(&state, &semantic_tokens).await?;
         if let Some(hidden) = maybe_hidden {
             // println!("{:?} maybe?", hidden.squeeze(1)?.shape());
             all_hidden_states.push(hidden.squeeze(1)?);

@@ -1,3 +1,4 @@
+pub mod silence_detector;
 pub mod utils;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
