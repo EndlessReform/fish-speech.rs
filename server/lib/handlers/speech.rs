@@ -14,7 +14,6 @@ use fish_speech_core::models::text2semantic::utils::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Deserialize)]

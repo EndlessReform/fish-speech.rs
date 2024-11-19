@@ -298,14 +298,14 @@ impl<'a> NeuralChunkedGenerator<'a> {
                 // Hysteresis for after the flush
                 self.consecutive_silence = 0;
                 self.initial_silence = true;
-                return Ok(ChunkedTokenState::FlushBuffer);
+                Ok(ChunkedTokenState::FlushBuffer)
             } else {
-                return Ok(ChunkedTokenState::Continue);
+                Ok(ChunkedTokenState::Continue)
             }
         } else {
             self.consecutive_silence = 0;
             self.initial_silence = false;
-            return Ok(ChunkedTokenState::Continue);
+            Ok(ChunkedTokenState::Continue)
         }
     }
 
