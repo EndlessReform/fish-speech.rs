@@ -151,32 +151,12 @@ fn clean_text(text: &str) -> String {
 
 fn split_into_chunks(text: &str) -> Vec<TextChunk> {
     let mut chunks = Vec::new();
-    let mut current_chunk = String::new();
-    let mut current_bytes = 0;
 
     // First pass: collect sentences and their sizes
     let sentences: Vec<&str> = text.split_inclusive(&['.', '!', '?'][..]).collect();
     if sentences.is_empty() {
         return chunks;
     }
-
-    let mut flush_chunk = |chunk: String, force_pause: bool| -> Option<String> {
-        if chunk.is_empty() {
-            return None;
-        }
-
-        // Only flush if we're over MIN_CHUNK_BYTES or it's the very last bit
-        if chunk.len() >= MIN_CHUNK_BYTES || force_pause {
-            chunks.push(TextChunk {
-                text: chunk,
-                should_pause_after: force_pause,
-            });
-            None
-        } else {
-            // Return the chunk to be combined with the next one
-            Some(chunk)
-        }
-    };
 
     let mut pending_small_chunk: Option<String> = None;
 

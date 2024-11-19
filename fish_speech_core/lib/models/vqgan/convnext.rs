@@ -1,11 +1,8 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
-use super::{
-    config::{FireflyConfig, WhichModel},
-    utils::FishConvNet,
-};
+use super::{config::WhichModel, utils::FishConvNet};
 use candle_core::{Error, Result, Tensor};
-use candle_nn::{seq, Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
 pub struct ConvNeXtBlockConfig {
     pub dim: usize,

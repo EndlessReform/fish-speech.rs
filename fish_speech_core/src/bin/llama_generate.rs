@@ -10,7 +10,6 @@ use fish_speech_core::models::text2semantic::utils::{
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use fish_speech_core::models::vqgan::config::WhichModel;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 fn generate_long(
@@ -56,13 +55,14 @@ fn generate_long(
     let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
     let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
 
-    let res = generate(
+    let (res, _) = generate(
         model,
         &final_prompt,
         args.max_new_tokens,
         im_end_id,
         pad_id,
         &sampling_args,
+        false,
     )?;
     model.clear_slow_layer_caches();
     let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;

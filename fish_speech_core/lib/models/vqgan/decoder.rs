@@ -53,7 +53,6 @@ impl FireflyDecoder {
         )?;
 
         let z = self.quantizer.decode(indices)?;
-        println!("Tokens dequantized! Starting GAN");
         let mel_masks_float_conv = mel_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
         let audio_masks_float_conv = audio_masks.unsqueeze(1)?.to_dtype(z.dtype())?;
 
