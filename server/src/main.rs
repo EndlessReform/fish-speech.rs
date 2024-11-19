@@ -27,6 +27,9 @@ use tokio::sync::Mutex;
 // Re-export the key types
 pub use bytes::Bytes;
 pub use futures_util::Stream;
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::Method; // they love hiding basic HTTP stuff
+use tower_http::cors::{AllowHeaders, AllowMethods, Any, CorsLayer}; // MORE IMPORTS YAY
 
 #[derive(Parser)]
 struct Args {
@@ -214,6 +217,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/audio/speech/hidden", post(generate_hidden_states))
         .route("/v1/audio/encoding", post(encode_speaker))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state);
 
     axum::serve(listener, app.into_make_service())
