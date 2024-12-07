@@ -27,11 +27,11 @@ pub use futures_util::Stream;
 
 #[derive(Parser)]
 struct Args {
-    /// Checkpoint file path (default: "checkpoints/fish-1.4", canonicalized)
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
+    /// Checkpoint file path (default: "checkpoints/fish-1.5", canonicalized)
+    #[arg(long, default_value = "checkpoints/fish-speech-1.5")]
     checkpoint: PathBuf,
 
-    #[arg(short, long, default_value = "1.4")]
+    #[arg(short, long, default_value = "1.5")]
     fish_version: WhichModel,
 
     /// Directory containing voice embeddings
@@ -76,17 +76,25 @@ async fn main() -> anyhow::Result<()> {
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
     let vb_lm = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        WhichModel::Fish1_2 => {
+            VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
+        }
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[checkpoint_dir.join("model.safetensors")],
                 dtype,
                 &device,
             )?
         },
-        _ => VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?,
     };
     let vb_firefly = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        WhichModel::Fish1_2 => VarBuilder::from_pth(
+            args.checkpoint
+                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
+            dtype,
+            &device,
+        )?,
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[args
                     .checkpoint
@@ -95,15 +103,15 @@ async fn main() -> anyhow::Result<()> {
                 &device,
             )?
         },
+    };
+    let vb_encoder = match args.fish_version {
         WhichModel::Fish1_2 => VarBuilder::from_pth(
             args.checkpoint
                 .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            dtype,
+            DType::F32,
             &device,
         )?,
-    };
-    let vb_encoder = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[args
                     .checkpoint
@@ -112,12 +120,6 @@ async fn main() -> anyhow::Result<()> {
                 &device,
             )?
         },
-        WhichModel::Fish1_2 => VarBuilder::from_pth(
-            args.checkpoint
-                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            DType::F32,
-            &device,
-        )?,
     };
     let firefly_config = match args.fish_version {
         WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),

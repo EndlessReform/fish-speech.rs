@@ -4,14 +4,20 @@
 
 This repo requires a working Rust installation ([see official docs](https://www.rust-lang.org/tools/install)). Packaging for homebrew and Linux to come.
 
+
 Save the Fish Speech checkpoints to `./checkpoints`. I recommend using [`huggingface-cli`](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli):
+
+> TODO: Auto-download
 
 ```bash
 # If it's not already on system
 brew install huggingface-cli
+# For Windows or Linux (assumes working Python):
+# pip install -U "huggingface_hub[cli]"
+# or just download the folder manually
 
-mkdir -p checkpoints/fish-speech-1.4
-huggingface-cli download jkeisling/fish-speech-1.4 --local-dir checkpoints/fish-speech-1.4
+mkdir -p checkpoints/fish-speech-1.5
+huggingface-cli download jkeisling/fish-speech-1.5 --local-dir checkpoints/fish-speech-1.5
 ```
 
 Note that we don't support the official `.pth` weights.
@@ -31,7 +37,7 @@ For now, we're keeping compatibility with the official Fish Speech inference CLI
 cargo run --release --features metal --bin encoder -- -i ./tests/resources/sky.wav
 ```
 
-For 1.2, you'll need to specify version and checkpoints manually:
+For earlier versions, you'll need to specify version and checkpoints manually:
 
 ```bash
 cargo run --release --bin encoder -- --input ./tests/resources/sky.wav --output-path fake.npy --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
@@ -39,7 +45,7 @@ cargo run --release --bin encoder -- --input ./tests/resources/sky.wav --output-
 
 ### Generate semantic codebook tokens
 
-For Fish 1.4 (default):
+For Fish 1.5 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
@@ -49,19 +55,19 @@ cargo run --release --features metal --bin llama_generate -- \
   --prompt-tokens fake.npy
 ```
 
-For Fish 1.2, you'll have to specify version and checkpoint explicitly:
+For earlier versions, you'll have to specify version and checkpoint explicitly. For example, for Fish 1.2:
 
 ```bash
 cargo run --release --features metal --bin llama_generate -- --text "That is not dead which can eternal lie, and with strange aeons even death may die." --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
 ```
 
-For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.14135) support. 
+For additional speed, compile with [Flash Attention](https://arxiv.org/abs/2205.14135) support.
 
 > [!WARNING]
-> 
-> The candle-flash-attention dependency [can take more than 10 minutes to compile](https://github.com/huggingface/candle/issues/2275) even on a good CPU, and can require more than 16 GB of memory! You have been warned. 
-> 
-> Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact. 
+>
+> The candle-flash-attention dependency [can take more than 10 minutes to compile](https://github.com/huggingface/candle/issues/2275) even on a good CPU, and can require more than 16 GB of memory! You have been warned.
+>
+> Also, of October 2024 the bottleneck is actually elsewhere (in inefficient memory copies and kernel dispatch), so on already fast hardware (like an RTX 4090) this currently has less of an impact.
 
 ```bash
 # Cache the Flash Attention build
@@ -79,14 +85,14 @@ cargo run --release --features flash-attn --bin llama_generate -- \
 
 ### Decode tokens to WAV
 
-For Fish 1.4 (default):
+For Fish 1.5 (default):
 
 ```bash
 # Switch to --features cuda for Nvidia GPUs
 cargo run --release --features metal --bin vocoder -- -i out.npy -o fake.wav
 ```
 
-For Fish 1.2:
+For earlier models, please specify the version. 1.2 example:
 
 ```bash
 cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoints/fish-speech-1.2-sft
@@ -122,7 +128,7 @@ Supported languages:
 - Korean (ko) ~20k hours
 - Arabic (ar) ~20k hours
 
-Please refer to [Fish Speech Github](https://github.com/fishaudio/fish-speech) for more info.  
+Please refer to [Fish Speech Github](https://github.com/fishaudio/fish-speech) for more info.
 Demo available at [Fish Audio](https://fish.audio/).
 
 ## Citation

@@ -10,7 +10,7 @@ use fish_speech_core::models::text2semantic::utils::{
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use fish_speech_core::models::vqgan::config::WhichModel;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+// use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 fn generate_long(
@@ -106,8 +106,8 @@ struct Args {
     #[arg(short, long, default_value = "out.npy")]
     out_path: PathBuf,
 
-    /// Checkpoint file path (default: "checkpoints/fish-1.4", canonicalized)
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
+    /// Checkpoint file path (default: "checkpoints/fish-1.5", canonicalized)
+    #[arg(long, default_value = "checkpoints/fish-speech-1.5")]
     checkpoint: PathBuf,
 
     /// Optional multiple prompt token files
@@ -118,7 +118,7 @@ struct Args {
     #[arg(long, num_args=1..)]
     prompt_text: Vec<String>,
 
-    #[arg(short, long, default_value = "1.4")]
+    #[arg(short, long, default_value = "1.5")]
     fish_version: WhichModel,
 }
 
