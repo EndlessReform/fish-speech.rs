@@ -74,7 +74,7 @@ impl RepPenProcessor {
 }
 
 /// Extremely stripped-down CPU softmax for slow model out
-pub fn softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: u32) -> u32 {
+pub fn legacy_softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: u32) -> u32 {
     // Compute softmax
     let exp_pad = (pad_prob - pad_prob.max(eos_prob)).exp();
     let exp_eos = (eos_prob - pad_prob.max(eos_prob)).exp();
@@ -94,23 +94,45 @@ pub fn softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: u32) ->
     }
 }
 
-pub fn load_prompt_texts(
-    prompt_tokens: &[PathBuf],
-    prompt_texts: Vec<String>,
+pub fn load_prompt_text(
+    prompt_path: &PathBuf,
     device: &Device,
-) -> anyhow::Result<Vec<(String, Tensor)>> {
-    if prompt_tokens.len() != prompt_texts.len() {
-        Err(anyhow::anyhow!(
-            "Prompt token length {:?} does not match prompt text length {:?}",
-            prompt_tokens.len(),
-            prompt_texts.len()
-        ))?
+    num_codebooks: usize,
+) -> Result<Tensor> {
+    let prompt_tokens = Tensor::read_npy(prompt_path)?.to_dtype(DType::U32)?;
+    let prompt_tokens = prompt_tokens.to_dtype(DType::U32)?.to_device(device)?;
+    match (prompt_tokens.rank(), prompt_tokens.dim(0)) {
+        (2, Ok(n_actual_codebooks)) => {
+            // Fine
+            if n_actual_codebooks == num_codebooks {
+                return Ok(prompt_tokens);
+            } else {
+                candle_core::bail!(
+                    "Expected {} codebooks but got {}",
+                    num_codebooks,
+                    n_actual_codebooks
+                )
+            }
+        }
+        (3, Ok(1)) => {
+            // Ghost third dimension OK
+            if prompt_tokens.dim(1)? == num_codebooks {
+                prompt_tokens.squeeze(0)
+            } else {
+                candle_core::bail!(
+                    "Expected {} codebooks but got {}",
+                    num_codebooks,
+                    prompt_tokens.dim(1)?
+                )
+            }
+        }
+        (d, _) => {
+            candle_core::bail!(
+                "Incorrect prompt token dimensions for {:?}: {d}",
+                prompt_path
+            )
+        }
     }
-
-    let codes: Result<Vec<Tensor>> = prompt_tokens.iter().map(Tensor::read_npy).collect();
-    let codes: Result<Vec<Tensor>> = codes?.into_iter().map(|c| c.to_device(device)).collect();
-
-    Ok(prompt_texts.into_iter().zip(codes?).collect())
 }
 
 pub struct SamplingArgs {

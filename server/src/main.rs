@@ -126,11 +126,24 @@ async fn main() -> anyhow::Result<()> {
         _ => FireflyConfig::fish_speech_1_4(),
     };
 
-    let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+    let semantic_start_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
+        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+    } as i64;
+    let semantic_end_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer
+            .token_to_id(&format!(
+                "<|semantic:{}|>",
+                semantic_config.codebook_size - 1
+            ))
+            .map(|id| id as i64),
+        _ => None,
+    };
     let semantic_model = Arc::new(Mutex::new(DualARTransformer::load(
         &vb_lm,
         &semantic_config,
-        semantic_token_id as i64,
+        semantic_start_id,
+        semantic_end_id,
     )?));
     let vocoder_model = Arc::new(FireflyDecoder::load(
         &vb_firefly,
@@ -151,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         &tokenizer,
         &device,
         semantic_config.num_codebooks,
+        args.fish_version.clone(),
     )?;
     println!("Loaded {} voices", speakers.len());
 

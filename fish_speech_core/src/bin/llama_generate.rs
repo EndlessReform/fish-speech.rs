@@ -3,14 +3,13 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_tokens,
+    encode::PromptEncoder,
     generate::generate,
-    sample::{load_prompt_texts, SamplingArgs},
+    sample::{load_prompt_text, SamplingArgs},
 };
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
 use fish_speech_core::models::vqgan::config::WhichModel;
 use std::path::PathBuf;
-// use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 fn generate_long(
@@ -18,6 +17,7 @@ fn generate_long(
     tokenizer: &Tokenizer,
     args: &Args,
     device: &Device,
+    model_type: WhichModel,
 ) -> anyhow::Result<()> {
     let sampling_args = SamplingArgs {
         temp: args.temp,
@@ -26,31 +26,57 @@ fn generate_long(
         repetition_penalty: args.repetition_penalty,
     };
 
-    let conditioning_prompts =
-        load_prompt_texts(&args.prompt_tokens, args.prompt_text.clone(), device)?;
+    if &args.prompt_tokens.len() != &args.prompt_text.len() {
+        Err(anyhow::anyhow!(
+            "Prompt token length {:?} does not match prompt text length {:?}",
+            &args.prompt_tokens.len(),
+            &args.prompt_text.len()
+        ))?
+    }
 
-    let encoded_prompts: Result<Tensor> = conditioning_prompts
+    let conditioning_tensors: Result<Vec<Tensor>> = args
+        .prompt_tokens
         .iter()
-        .map(|(t, c)| encode_tokens(tokenizer, t, device, Some(c), model.cfg.num_codebooks))
-        .try_fold(
-            Tensor::from_slice(
-                &(vec![] as Vec<u32>),
-                (model.cfg.num_codebooks + 1, 0),
-                &device,
-            )?,
-            |acc, e| e.and_then(|tensor| Tensor::cat(&[&acc, &tensor], D::Minus1)),
-        );
-    let encoded_prompts = encoded_prompts?;
-    let encoded = vec![encode_tokens(
-        &tokenizer,
-        &args.text,
-        device,
-        None,
-        model.cfg.num_codebooks,
-    )?];
-    // TODO: this is terrible; do more intelligent splitting as per upstream
-    // let final_prompt = encoded_prompts.into_iter().unwrap();
-    let final_prompt = Tensor::cat(&[encoded_prompts, encoded[0].clone()], D::Minus1)?;
+        .map(|path| load_prompt_text(path, device, model.cfg.num_codebooks))
+        .collect();
+    let prompt_encoder = PromptEncoder::new(tokenizer, device, model.cfg.num_codebooks, model_type);
+
+    let conditioning_prompts: Result<Vec<Tensor>> = args
+        .prompt_text
+        .iter()
+        .zip(conditioning_tensors?.iter())
+        .map(|(t, c)| prompt_encoder.encode_conditioning_prompt(t, c))
+        .collect();
+    let final_conditioning = match model_type {
+        WhichModel::Fish1_5 => {
+            // The upstream hard-codes a system prompt:
+            // https://github.com/fishaudio/fish-speech/blame/b11bcf834a97a75073b535838e5f0765f169eb94/tools/llama/generate.py#L756
+            // I'm also hard-coding for now to match upstream since I don't know if this actually affects output quality.
+            // TODO: make this configurable, experiment!
+            let system_prompt =
+                prompt_encoder.encode_text("system", Some("Speak out the provided text"))?;
+
+            // This is disgusting but whatever, it's not in the hot loop
+            let mut all_tensors = vec![system_prompt];
+            all_tensors.extend(conditioning_prompts?.iter().cloned());
+            Tensor::cat(&all_tensors, D::Minus1)?
+        }
+        _ => Tensor::cat(&conditioning_prompts?, D::Minus1)?,
+    };
+
+    // TODO: use splitting code from the server
+    let text_to_generate = prompt_encoder.encode_text("user", Some(&args.text))?;
+    println!("Text: {:?}", &args.text);
+    let assistant_preprompt = prompt_encoder.encode_vq(None)?;
+
+    println!(
+        "Speaker conditioning size: {:?}",
+        final_conditioning.shape()
+    );
+    let final_prompt = Tensor::cat(
+        &[final_conditioning, text_to_generate, assistant_preprompt],
+        D::Minus1,
+    )?;
 
     println!("Loaded prompt with shape {:?}", final_prompt.shape());
     let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
@@ -65,7 +91,11 @@ fn generate_long(
         &sampling_args,
     )?;
     model.clear_slow_layer_caches();
-    let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
+    let res = match model_type {
+        WhichModel::Fish1_5 => res,
+        _ => res.broadcast_sub(&Tensor::ones_like(&res)?)?,
+    };
+    // let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
     res.write_npy(&args.out_path)?;
 
     Ok(())
@@ -149,19 +179,38 @@ fn main() -> anyhow::Result<()> {
     let dtype = DType::F32;
 
     let vb = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        WhichModel::Fish1_2 => {
+            VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
+        }
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[checkpoint_dir.join("model.safetensors")],
                 dtype,
                 &device,
             )?
         },
-        _ => VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?,
     };
-    let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
-    let mut model = DualARTransformer::load(&vb, &config, semantic_token_id as i64).unwrap();
+
+    let semantic_start_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
+        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+    } as i64;
+    let semantic_end_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer
+            .token_to_id(&format!("<|semantic:{}|>", config.codebook_size - 1))
+            .map(|id| id as i64),
+        _ => None,
+    };
+    let mut model =
+        DualARTransformer::load(&vb, &config, semantic_start_id, semantic_end_id).unwrap();
     println!("Model loaded to {:?}", device);
-    generate_long(&mut model, &tokenizer, &args, &device)?;
+    generate_long(
+        &mut model,
+        &tokenizer,
+        &args,
+        &device,
+        args.fish_version.clone(),
+    )?;
 
     Ok(())
 }

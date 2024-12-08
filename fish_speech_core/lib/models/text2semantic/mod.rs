@@ -177,7 +177,7 @@ fn flash_attn(
 }
 
 impl Attention {
-    pub fn load(vb: &VarBuilder, config: &BaseModelArgs, is_fast: bool) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, config: &BaseModelArgs) -> Result<Self> {
         let total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim;
         // KQV for all heads, but in a batch
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
@@ -340,8 +340,8 @@ pub struct TransformerBlock {
 }
 
 impl TransformerBlock {
-    pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs, is_fast: bool) -> Result<Self> {
-        let attention = Attention::load(&vb.pp("attention"), cfg, is_fast)?;
+    pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs) -> Result<Self> {
+        let attention = Attention::load(&vb.pp("attention"), cfg)?;
         let feed_forward = FeedForward::load(&vb.pp("feed_forward"), cfg)?;
         let ffn_norm = RmsNorm::new(vb.get(cfg.dim, "ffn_norm.weight")?, cfg.norm_eps);
         let attention_norm = RmsNorm::new(vb.get(cfg.dim, "attention_norm.weight")?, cfg.norm_eps);
@@ -378,13 +378,19 @@ pub struct DualARTransformer {
     fast_output: Linear,
     norm: RmsNorm,
     fast_norm: RmsNorm,
-    semantic_token_id: i64,
     freqs_cis: (Tensor, Tensor),
     pub cfg: BaseModelArgs,
+    semantic_start_id: i64,
+    semantic_end_id: Option<i64>,
 }
 
 impl DualARTransformer {
-    pub fn load(vb: &VarBuilder, cfg: &BaseModelArgs, semantic_token_id: i64) -> Result<Self> {
+    pub fn load(
+        vb: &VarBuilder,
+        cfg: &BaseModelArgs,
+        semantic_start_id: i64,
+        semantic_end_id: Option<i64>,
+    ) -> Result<Self> {
         let embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("embeddings"))?;
         let codebook_embeddings = Embedding::new(
             vb.get(
@@ -394,7 +400,7 @@ impl DualARTransformer {
             cfg.dim,
         );
         let layers: Result<Vec<TransformerBlock>> = (0..cfg.n_layer)
-            .map(|l| TransformerBlock::load(&vb.pp(format!("layers.{}", l)), cfg, false))
+            .map(|l| TransformerBlock::load(&vb.pp(format!("layers.{}", l)), cfg))
             .collect();
         let layers = layers?;
         let norm = RmsNorm::new(vb.get(cfg.dim, "norm.weight")?, cfg.norm_eps);
@@ -404,7 +410,7 @@ impl DualARTransformer {
             cfg.dim,
         );
         let fast_layers: Result<Vec<TransformerBlock>> = (0..cfg.n_fast_layer)
-            .map(|l| TransformerBlock::load(&vb.pp(format!("fast_layers.{}", l)), cfg, true))
+            .map(|l| TransformerBlock::load(&vb.pp(format!("fast_layers.{}", l)), cfg))
             .collect();
         let fast_layers = fast_layers?;
         let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
@@ -424,9 +430,10 @@ impl DualARTransformer {
             fast_output,
             fast_norm,
             norm,
-            semantic_token_id,
             cfg: cfg.clone(),
             freqs_cis,
+            semantic_start_id,
+            semantic_end_id,
         })
     }
 
@@ -455,10 +462,14 @@ impl DualARTransformer {
             .unsqueeze(1)?,
         )?;
         let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
-        let emb_mask = semantic_tokens
-            .eq(self.semantic_token_id)?
-            .unsqueeze(D::Minus1)?
-            .to_dtype(codebook_emb.dtype())?;
+        let emb_mask = match self.semantic_end_id {
+            Some(end_id) => semantic_tokens
+                .le(end_id)?
+                .mul(&semantic_tokens.ge(self.semantic_start_id)?),
+            None => semantic_tokens.eq(self.semantic_start_id),
+        }?
+        .unsqueeze(D::Minus1)?
+        .to_dtype(codebook_emb.dtype())?;
         let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
         let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 0)?;
         x.sum_keepdim(0)
