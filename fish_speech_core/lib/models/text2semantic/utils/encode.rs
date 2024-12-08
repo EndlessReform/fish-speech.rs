@@ -78,8 +78,6 @@ impl<'a> PromptEncoder<'a> {
         };
         let semantic_tokens = semantic_tokens?.unsqueeze(0)?;
         let vq_span = if self.model_type == WhichModel::Fish1_5 {
-            // TODO: are tokens shifted here?
-            println!("Semantic size: {:?}", semantic_tokens.shape());
             Tensor::cat(&[semantic_tokens, prompt_tokens.clone()], 0)
         } else {
             let data = prompt_tokens.broadcast_add(&Tensor::ones_like(&prompt_tokens)?)?;
