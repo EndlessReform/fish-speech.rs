@@ -34,9 +34,12 @@ async fn generate_pcm_chunk(state: &Arc<AppState>, encoded_input: &Tensor) -> Re
         .context("Failed to generate tokens")?;
 
         model.clear_slow_layer_caches();
-        tokens
-            .broadcast_sub(&Tensor::ones_like(&tokens).context("Failed to create ones tensor")?)
-            .context("Failed to broadcast subtract")?
+        match state.model_type {
+            fish_speech_core::models::vqgan::config::WhichModel::Fish1_5 => tokens,
+            _ => tokens
+                .broadcast_sub(&Tensor::ones_like(&tokens).context("Failed to create ones tensor")?)
+                .context("Failed to broadcast subtract")?,
+        }
     };
 
     let vocoder = state.vocoder_model.clone();
@@ -100,6 +103,7 @@ pub async fn generate_speech(
         &state.device,
         Some(&voice_embedding),
         num_codebooks,
+        state.model_type,
     )?;
 
     if request.response_format == Some("opus".into()) {

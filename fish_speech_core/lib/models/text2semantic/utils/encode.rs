@@ -77,13 +77,11 @@ impl<'a> PromptEncoder<'a> {
             Tensor::from_vec(vec![semantic_id; seqlen], seqlen, &self.device)
         };
         let semantic_tokens = semantic_tokens?.unsqueeze(0)?;
-        println!("Starting the hell block");
         let vq_span = if self.model_type == WhichModel::Fish1_5 {
             // TODO: are tokens shifted here?
             println!("Semantic size: {:?}", semantic_tokens.shape());
             Tensor::cat(&[semantic_tokens, prompt_tokens.clone()], 0)
         } else {
-            println!("In the hell block");
             let data = prompt_tokens.broadcast_add(&Tensor::ones_like(&prompt_tokens)?)?;
             Tensor::cat(&[semantic_tokens, data], 0)
         };
@@ -108,50 +106,36 @@ pub fn encode_chunks(
     device: &Device,
     cached_speaker: Option<&Tensor>,
     num_codebooks: usize,
+    model_type: WhichModel,
 ) -> Result<Vec<Tensor>> {
     let mut encoded_chunks = Vec::new();
 
+    let prompt_encoder = PromptEncoder::new(tokenizer, device, num_codebooks, model_type);
+    // TODO: make this configurable if lenguye says this works
+    let system_prompt =
+        prompt_encoder.encode_text("system", Some("Speak out the provided text"))?;
+    let assistant_start = prompt_encoder.encode_vq(None)?;
+
     for chunk in chunks {
         // Format each chunk with the dialogue markers
-        let turn_string = format!(
-            "<|im_start|>user\n{}<|im_end|><|im_start|>assistant\n",
-            chunk.text
-        );
+        let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
 
-        let encodings = tokenizer
-            .encode(turn_string, false)
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenization failed: {}", e)))?;
-        let new_tokens = encodings.get_ids();
-        let tokens = Tensor::from_slice(new_tokens, (1, new_tokens.len()), device)?;
-
-        // Pad codebooks for text prompt
-        let zeros = Tensor::zeros((num_codebooks, new_tokens.len()), DType::U32, device)?;
-        let prompt = Tensor::cat(&[tokens, zeros], 0)?;
-
-        let encoded = if let Some(prompt_tokens) = cached_speaker {
-            let prompt_tokens = prompt_tokens.to_dtype(DType::U32)?;
-            let prompt_tokens = match prompt_tokens.shape().rank() {
-                3 => {
-                    assert_eq!(
-                        prompt_tokens.dim(0)?,
-                        1,
-                        "3 dim prompt tokens should have shape (1, num_codebooks, seq_len)"
-                    );
-                    prompt_tokens.squeeze(0)?
-                }
-                2 => prompt_tokens.clone(),
-                _ => {
-                    return Err(candle_core::Error::Msg(
-                        "Prompt tokens must have 2 or 3 dimensions".into(),
-                    ))
-                }
-            };
-            println!("Prompt token shape: {:?}", prompt_tokens.shape());
-            assert_eq!(prompt_tokens.dim(0)?, num_codebooks + 1);
-
-            Tensor::cat(&[prompt_tokens, prompt], 1)?
+        let encoded = if let Some(conditioning_tokens) = cached_speaker {
+            // Assume the preprocessing code from earlier worked fine
+            Tensor::cat(
+                &[
+                    system_prompt.clone(),
+                    conditioning_tokens.clone(),
+                    user_request,
+                    assistant_start.clone(),
+                ],
+                1,
+            )?
         } else {
-            prompt
+            Tensor::cat(
+                &[system_prompt.clone(), user_request, assistant_start.clone()],
+                1,
+            )?
         };
 
         encoded_chunks.push(encoded);

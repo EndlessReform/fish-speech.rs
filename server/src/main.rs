@@ -181,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         default_voice: Arc::new(default_speaker),
         temp: args.temp,
         top_p: args.top_p,
+        model_type: args.fish_version,
     });
 
     // Create router

@@ -81,16 +81,18 @@ fn generate_long(
     println!("Loaded prompt with shape {:?}", final_prompt.shape());
     let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
     let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
-    let speaker_tokens = final_prompt
-        .i((0, ..))?
-        .flatten_all()?
-        .to_device(&Device::Cpu)?
-        .to_vec1::<u32>()?;
-    println!("Input trokens:\n{:?}", &speaker_tokens);
-    println!(
-        "Input prompt:\n{}",
-        tokenizer.decode(&speaker_tokens, false).unwrap()
-    );
+    // For debugging
+    //
+    // let speaker_tokens = final_prompt
+    //     .i((0, ..))?
+    //     .flatten_all()?
+    //     .to_device(&Device::Cpu)?
+    //     .to_vec1::<u32>()?;
+    // println!("Input tokens:\n{:?}", &speaker_tokens);
+    // println!(
+    //     "Input prompt:\n{}",
+    //     tokenizer.decode(&speaker_tokens, false).unwrap()
+    // );
 
     let res = generate(
         model,
