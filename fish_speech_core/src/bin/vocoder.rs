@@ -21,10 +21,10 @@ struct Args {
     #[arg(short, long, default_value = "fake.wav")]
     output_path: PathBuf,
 
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4/")]
+    #[arg(long, default_value = "checkpoints/fish-speech-1.5/")]
     checkpoint: PathBuf,
 
-    #[arg(long, default_value = "1.4")]
+    #[arg(long, default_value = "1.5")]
     fish_version: WhichModel,
 }
 

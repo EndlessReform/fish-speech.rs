@@ -1,4 +1,4 @@
-use super::sample::{softmax_sample, RepPenProcessor, SamplingArgs};
+use super::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
 use crate::models::text2semantic::DualARTransformer;
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -18,16 +18,22 @@ fn decode_one_token_ar(
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
 
-    let pad_prob = slow_logits
-        .i(pad_id as usize)?
-        .to_dtype(DType::F32)?
-        .to_scalar::<f32>()?;
-    let eos_prob = slow_logits
-        .i(im_end_id as usize)?
-        .to_dtype(DType::F32)?
-        .to_scalar::<f32>()?;
+    let semantic_token = if model.semantic_end_id.is_none() {
+        let pad_prob = slow_logits
+            .i(pad_id as usize)?
+            .to_dtype(DType::F32)?
+            .to_scalar::<f32>()?;
+        let eos_prob = slow_logits
+            .i(im_end_id as usize)?
+            .to_dtype(DType::F32)?
+            .to_scalar::<f32>()?;
 
-    let semantic_token = softmax_sample(pad_prob, eos_prob, pad_id, im_end_id);
+        // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
+        legacy_softmax_sample(pad_prob, eos_prob, pad_id, im_end_id)
+    } else {
+        // TODO DO NOT MERGE: add the split again. I can't be bothered
+        fast_logits_processor.sample(&slow_logits)?
+    };
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 

@@ -33,6 +33,12 @@ impl SpecTransformConfig {
             ..Default::default()
         }
     }
+    // Identical from 1.2 -> 1.5
+    pub fn fish_1_5() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +69,12 @@ impl BackboneConfig {
     }
     // Identical from 1.2 -> 1.4
     pub fn fish_1_4() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+    // Identical from 1.2 -> 1.5
+    pub fn fish_1_5() -> Self {
         Self {
             ..Default::default()
         }
@@ -110,6 +122,11 @@ impl HiFiGANConfig {
             ..Default::default()
         }
     }
+    pub fn fish_1_5() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
 }
 
 // https://github.com/fishaudio/fish-speech/blob/9e2f5e6b3a382849b8ee54da10d6a68bbd913f4d/fish_speech/models/vqgan/modules/fsq.py#L4
@@ -145,6 +162,9 @@ impl DownsampleFSQConfig {
             downsample_factor: vec![2, 2],
         }
     }
+    pub fn firefly_1_5() -> Self {
+        DownsampleFSQConfig::firefly_1_4()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +197,7 @@ impl FireflyConfig {
         match model {
             WhichModel::Fish1_2 => Self::fish_speech_1_2(),
             WhichModel::Fish1_4 => Self::fish_speech_1_4(),
+            WhichModel::Fish1_5 => Self::fish_speech_1_4(),
         }
     }
 }
@@ -188,4 +209,7 @@ pub enum WhichModel {
 
     #[value(name = "1.4")]
     Fish1_4,
+
+    #[value(name = "1.5")]
+    Fish1_5,
 }

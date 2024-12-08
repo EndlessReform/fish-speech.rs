@@ -7,3 +7,4 @@ checkpoints
 !spec_transform_fish_c_order.npy
 fake.wav
 voices
+!voices-template/default.npy

@@ -27,11 +27,11 @@ pub use futures_util::Stream;
 
 #[derive(Parser)]
 struct Args {
-    /// Checkpoint file path (default: "checkpoints/fish-1.4", canonicalized)
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
+    /// Checkpoint file path (default: "checkpoints/fish-1.5", canonicalized)
+    #[arg(long, default_value = "checkpoints/fish-speech-1.5")]
     checkpoint: PathBuf,
 
-    #[arg(short, long, default_value = "1.4")]
+    #[arg(short, long, default_value = "1.5")]
     fish_version: WhichModel,
 
     /// Directory containing voice embeddings
@@ -76,17 +76,25 @@ async fn main() -> anyhow::Result<()> {
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
     let vb_lm = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        WhichModel::Fish1_2 => {
+            VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
+        }
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[checkpoint_dir.join("model.safetensors")],
                 dtype,
                 &device,
             )?
         },
-        _ => VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?,
     };
     let vb_firefly = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        WhichModel::Fish1_2 => VarBuilder::from_pth(
+            args.checkpoint
+                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
+            dtype,
+            &device,
+        )?,
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[args
                     .checkpoint
@@ -95,15 +103,15 @@ async fn main() -> anyhow::Result<()> {
                 &device,
             )?
         },
+    };
+    let vb_encoder = match args.fish_version {
         WhichModel::Fish1_2 => VarBuilder::from_pth(
             args.checkpoint
                 .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            dtype,
+            DType::F32,
             &device,
         )?,
-    };
-    let vb_encoder = match args.fish_version {
-        WhichModel::Fish1_4 => unsafe {
+        _ => unsafe {
             VarBuilder::from_mmaped_safetensors(
                 &[args
                     .checkpoint
@@ -112,23 +120,30 @@ async fn main() -> anyhow::Result<()> {
                 &device,
             )?
         },
-        WhichModel::Fish1_2 => VarBuilder::from_pth(
-            args.checkpoint
-                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            DType::F32,
-            &device,
-        )?,
     };
     let firefly_config = match args.fish_version {
         WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
         _ => FireflyConfig::fish_speech_1_4(),
     };
 
-    let semantic_token_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+    let semantic_start_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
+        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+    } as i64;
+    let semantic_end_id = match args.fish_version {
+        WhichModel::Fish1_5 => tokenizer
+            .token_to_id(&format!(
+                "<|semantic:{}|>",
+                semantic_config.codebook_size - 1
+            ))
+            .map(|id| id as i64),
+        _ => None,
+    };
     let semantic_model = Arc::new(Mutex::new(DualARTransformer::load(
         &vb_lm,
         &semantic_config,
-        semantic_token_id as i64,
+        semantic_start_id,
+        semantic_end_id,
     )?));
     let vocoder_model = Arc::new(FireflyDecoder::load(
         &vb_firefly,
@@ -149,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         &tokenizer,
         &device,
         semantic_config.num_codebooks,
+        args.fish_version.clone(),
     )?;
     println!("Loaded {} voices", speakers.len());
 
@@ -165,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         default_voice: Arc::new(default_speaker),
         temp: args.temp,
         top_p: args.top_p,
+        model_type: args.fish_version,
     });
 
     // Create router

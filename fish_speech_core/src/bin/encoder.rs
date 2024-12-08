@@ -21,10 +21,10 @@ struct Args {
     dest_audio: PathBuf,
 
     /// Path to the model checkpoint
-    #[arg(long, default_value = "checkpoints/fish-speech-1.4")]
+    #[arg(long, default_value = "checkpoints/fish-speech-1.5")]
     checkpoint: PathBuf,
 
-    #[arg(long, default_value = "1.4")]
+    #[arg(long, default_value = "1.5")]
     fish_version: WhichModel,
 }
 
@@ -32,9 +32,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     println!("Processing in-place reconstruction of {:?}", args.src_audio);
-    println!(
-        "Warning: Loading precomputed audio for debugging. Please don't use this for production"
-    );
 
     #[cfg(feature = "cuda")]
     let device = Device::new_cuda(0)?;
@@ -50,7 +47,6 @@ fn main() -> Result<()> {
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
     }
-
 
     let config = FireflyConfig::get_config_for(args.fish_version);
     // Add spurious batch dimension for consistency

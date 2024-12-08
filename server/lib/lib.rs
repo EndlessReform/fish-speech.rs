@@ -3,7 +3,9 @@ pub mod opus;
 pub mod state;
 
 use candle_core::{Device, Tensor};
-use fish_speech_core::models::text2semantic::utils::encode::encode_tokens;
+use fish_speech_core::models::text2semantic::utils::encode::PromptEncoder;
+use fish_speech_core::models::text2semantic::utils::sample::load_prompt_text;
+use fish_speech_core::models::vqgan::config::WhichModel;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,6 +22,7 @@ pub fn load_speaker_prompts(
     tokenizer: &Tokenizer,
     device: &Device,
     num_codebooks: usize,
+    model_type: WhichModel,
 ) -> anyhow::Result<(HashMap<String, Tensor>, Tensor)> {
     // Load the index file
     let index_path = voice_dir.join("index.json");
@@ -28,23 +31,17 @@ pub fn load_speaker_prompts(
             .map_err(|_| anyhow::anyhow!("Failed to open speaker index.json"))?,
     )?;
 
+    // TODO: pass model down?
+    let prompt_encoder = PromptEncoder::new(tokenizer, device, num_codebooks, model_type);
     let mut speakers = HashMap::new();
     let mut default_prompt = None;
 
     for (name, prompt_text) in index.speakers {
         let npy_path = voice_dir.join(format!("{}.npy", name));
-        let prompt_tensor = Tensor::read_npy(&npy_path)?.to_device(device)?;
+        let prompt_tensor = load_prompt_text(&npy_path, device, num_codebooks)?;
 
         // Pre-process the full prompt once
-        let encoded = encode_tokens(
-            tokenizer,
-            &prompt_text,
-            device,
-            Some(&prompt_tensor),
-            num_codebooks,
-        )?;
-
-        let prompt = encoded;
+        let prompt = prompt_encoder.encode_conditioning_prompt(&prompt_text, &prompt_tensor)?;
 
         if name == "default" {
             default_prompt = Some(prompt.clone());
