@@ -139,7 +139,7 @@ Let's say you have a WAV file `fake.wav` for speaker name `alice`, where Alice s
 Make an API request to the server–for example, with curl:
 
 ```bash
-curl -X POST http://localhost:3000/v1/speakers/encode \
+curl -X POST http://localhost:3000/v1/audio/encoding \
   -F "file=@fake.wav" \
   --output alice.npy
 ```
