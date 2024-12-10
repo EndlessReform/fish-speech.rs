@@ -31,8 +31,10 @@ fn decode_one_token_ar(
         // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
         legacy_softmax_sample(pad_prob, eos_prob, pad_id, im_end_id)
     } else {
-        // TODO DO NOT MERGE: add the split again. I can't be bothered
-        fast_logits_processor.sample(&slow_logits)?
+        // Assumes im_end_id will always come after start. Since it's just 1.5 this is fine
+        let special_token_range = slow_logits.i(im_end_id as usize..)?.contiguous()?;
+        let shifted_token = fast_logits_processor.sample(&special_token_range)?;
+        shifted_token + im_end_id
     };
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
@@ -150,8 +152,9 @@ pub fn generate(
     let dt = start_decode.elapsed();
     let out_len = previous_tokens.dim(1)? as f64;
     println!(
-        "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
+        "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
+        dt.as_secs_f64(),
         out_len / dt.as_secs_f64(),
         (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
         (out_len / 21.535) / dt.as_secs_f64()

@@ -1,5 +1,5 @@
 use anyhow::Error;
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::{
