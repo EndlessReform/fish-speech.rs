@@ -105,8 +105,8 @@ pub fn generate(
     let dt = start_pp.elapsed();
     input_pos += prompt.dim(D::Minus1)?;
     println!(
-        "{:.2}s prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
-        dt.as_secs_f64(),
+        "{:.2}ms prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
+        dt.as_secs_f64() * 1000.0,
         input_pos,
         prompt_size,
         input_pos - prompt_size,

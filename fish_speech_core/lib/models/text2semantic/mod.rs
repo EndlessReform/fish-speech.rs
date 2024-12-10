@@ -138,14 +138,6 @@ fn precompute_freqs_cis(
     Ok((cos, sin))
 }
 
-/// Copied from phi3.rs
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?
@@ -338,8 +330,8 @@ impl Attention {
             Some((keys, values)) => {
                 let (_, _, seqlen, _) = keys.dims4()?;
                 let new_kv_length = seqlen.min(pos);
-                let new_keys = keys.i((.., .., 0..new_kv_length, ..))?;
-                let new_values = values.i((.., .., 0..new_kv_length, ..))?;
+                let new_keys = keys.i((.., .., 0..new_kv_length, ..))?.contiguous()?;
+                let new_values = values.i((.., .., 0..new_kv_length, ..))?.contiguous()?;
                 self.kv_cache = Some((new_keys, new_values));
                 Ok(())
             }
@@ -563,6 +555,7 @@ impl DualARTransformer {
         for layer in self.layers.iter_mut() {
             layer.attention.clear_cache_until(pos)?;
         }
+
         Ok(())
     }
 
