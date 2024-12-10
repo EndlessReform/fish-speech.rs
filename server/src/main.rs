@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 // Re-export the key types
 pub use bytes::Bytes;
 pub use futures_util::Stream;
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Parser)]
 struct Args {
@@ -189,12 +190,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/audio/speech", post(generate_speech))
         .route("/v1/audio/encoding", post(encode_speaker))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state);
 
     // Run server
     let addr = format!("0.0.0.0:{}", args.port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).tcp_nodelay(true).await?;
 
     Ok(())
 }

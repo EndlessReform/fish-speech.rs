@@ -8,3 +8,4 @@ checkpoints
 fake.wav
 voices
 !voices-template/default.npy
+.DS_Store

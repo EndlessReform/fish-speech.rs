@@ -30,3 +30,9 @@ impl axum::response::IntoResponse for AppError {
         (status, format!("Something went wrong: {}", self.0)).into_response()
     }
 }
+
+impl From<AppError> for std::io::Error {
+    fn from(err: AppError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::Other, err.0.to_string())
+    }
+}
