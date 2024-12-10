@@ -582,6 +582,6 @@ impl DualARTransformer {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (size1, size2), device)
+        Tensor::from_slice(&mask, (size1, size2), device)?.contiguous()
     }
 }
