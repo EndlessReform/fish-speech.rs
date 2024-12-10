@@ -330,6 +330,21 @@ impl Attention {
         // self.cache.reset();
         self.kv_cache = None;
     }
+
+    // NOT inclusive
+    pub fn clear_cache_until(&mut self, pos: usize) -> Result<()> {
+        match &self.kv_cache {
+            None => Ok(()),
+            Some((keys, values)) => {
+                let (_, _, seqlen, _) = keys.dims4()?;
+                let new_kv_length = seqlen.min(pos);
+                let new_keys = keys.i((.., .., 0..new_kv_length, ..))?;
+                let new_values = values.i((.., .., 0..new_kv_length, ..))?;
+                self.kv_cache = Some((new_keys, new_values));
+                Ok(())
+            }
+        }
+    }
 }
 
 pub struct TransformerBlock {
@@ -481,8 +496,10 @@ impl DualARTransformer {
         let mut x = self.embed(inp)?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
-        // TODO: Handle input_pos. I'm not convinced it matters at bs=1
-        let mask = get_mask(seq_len, x.device())?;
+        let mask = match seq_len {
+            1 => &self.get_mask_abs(1, 1, x.device())?,
+            _ => &self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
+        };
 
         let (cos_full, sin_full) = &self.freqs_cis;
         for layer in self.layers.iter_mut() {
@@ -540,5 +557,31 @@ impl DualARTransformer {
         for layer in self.layers.iter_mut() {
             layer.attention.clear_cache();
         }
+    }
+
+    pub fn clear_slow_caches_until(&mut self, pos: usize) -> Result<()> {
+        for layer in self.layers.iter_mut() {
+            layer.attention.clear_cache_until(pos)?;
+        }
+        Ok(())
+    }
+
+    pub fn curr_kv_size(&self) -> Result<usize> {
+        match &self.layers[0].attention.kv_cache {
+            Some((keys, _)) => keys.dim(D::Minus2),
+            _ => Ok(0),
+        }
+    }
+
+    fn get_mask_abs(&self, size1: usize, size2: usize, device: &Device) -> Result<Tensor> {
+        let context = self.cfg.max_seq_len;
+        let mask: Vec<_> = (0..size1)
+            .flat_map(|i| {
+                (0..size2).map(move |j| {
+                    u8::from(size1 + j > size2 + i || size1 + j + context < size2 + i)
+                })
+            })
+            .collect();
+        Tensor::from_slice(&mask, (size1, size2), device)
     }
 }

@@ -41,7 +41,7 @@ fn get_symbol_map() -> &'static HashMap<&'static str, &'static str> {
 // Constants at the top of the file
 const MAX_CHUNK_BYTES: usize = 500;
 const MIN_CHUNK_BYTES: usize = 100;
-const PREFERRED_CHUNK_BYTES: usize = 250;
+const PREFERRED_CHUNK_BYTES: usize = 150;
 
 #[derive(Clone, Debug)]
 pub struct TextChunk {

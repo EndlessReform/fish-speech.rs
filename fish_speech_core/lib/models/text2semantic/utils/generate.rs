@@ -90,22 +90,27 @@ pub fn generate(
     let mut fast_rep_pens = maybe_fast_rep_pens?;
 
     let start_pp = Instant::now();
+    let mut input_pos = model.curr_kv_size()?;
+    let prompt_size = prompt.dim(D::Minus1)?;
     let (mut previous_token, mut cur_token) = decode_one_token_ar(
         model,
         &mut fast_logits_processor,
         prompt,
-        0,
+        input_pos,
         im_end_id,
         pad_id,
         None,
         &mut fast_rep_pens,
     )?;
     let dt = start_pp.elapsed();
-    let mut input_pos = prompt.dim(D::Minus1)?;
+    input_pos += prompt.dim(D::Minus1)?;
     println!(
-        "{} prompt processing timesteps ({:.2} tokens/s)",
+        "{:.2}s prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
+        dt.as_secs_f64(),
         input_pos,
-        input_pos as f64 / dt.as_secs_f64()
+        prompt_size,
+        input_pos - prompt_size,
+        prompt_size as f64 / dt.as_secs_f64()
     );
 
     let mut previous_tokens = cur_token.clone();

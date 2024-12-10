@@ -98,6 +98,11 @@ impl<'a> PromptEncoder<'a> {
     }
 }
 
+pub struct EncodedChunks {
+    pub n_conditioning_tokens: usize,
+    pub chunks: Vec<Tensor>,
+}
+
 pub fn encode_chunks(
     tokenizer: &Tokenizer,
     chunks: Vec<TextChunk>,
@@ -105,7 +110,7 @@ pub fn encode_chunks(
     cached_speaker: Option<&Tensor>,
     num_codebooks: usize,
     model_type: WhichModel,
-) -> Result<Vec<Tensor>> {
+) -> Result<EncodedChunks> {
     let mut encoded_chunks = Vec::new();
 
     let prompt_encoder = PromptEncoder::new(tokenizer, device, num_codebooks, model_type);
@@ -113,22 +118,34 @@ pub fn encode_chunks(
     let system_prompt =
         prompt_encoder.encode_text("system", Some("Speak out the provided text"))?;
     let assistant_start = prompt_encoder.encode_vq(None)?;
+    let n_conditioning_tokens = match cached_speaker {
+        Some(t) => system_prompt.dim(1)? + t.dim(1)?,
+        _ => 0,
+    };
 
-    for chunk in chunks {
+    if chunks.len() == 0 {
+        candle_core::bail!("Input text cannot be empty");
+    }
+    for (i, chunk) in chunks.iter().enumerate() {
         // Format each chunk with the dialogue markers
         let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
 
         let encoded = if let Some(conditioning_tokens) = cached_speaker {
             // Assume the preprocessing code from earlier worked fine
-            Tensor::cat(
-                &[
-                    system_prompt.clone(),
-                    conditioning_tokens.clone(),
-                    user_request,
-                    assistant_start.clone(),
-                ],
-                1,
-            )?
+            if i == 0 {
+                Tensor::cat(
+                    &[
+                        system_prompt.clone(),
+                        conditioning_tokens.clone(),
+                        user_request,
+                        assistant_start.clone(),
+                    ],
+                    1,
+                )?
+            } else {
+                // Assume system prompt and conditioning are already in KV cache
+                Tensor::cat(&[user_request, assistant_start.clone()], 1)?
+            }
         } else {
             Tensor::cat(
                 &[system_prompt.clone(), user_request, assistant_start.clone()],
@@ -139,5 +156,9 @@ pub fn encode_chunks(
         encoded_chunks.push(encoded);
     }
 
-    Ok(encoded_chunks)
+    Ok(EncodedChunks {
+        n_conditioning_tokens,
+        // This is fine, by invariant it will complete
+        chunks: encoded_chunks,
+    })
 }
