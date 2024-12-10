@@ -152,8 +152,9 @@ pub fn generate(
     let dt = start_decode.elapsed();
     let out_len = previous_tokens.dim(1)? as f64;
     println!(
-        "{} tokens generated ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
+        "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
+        dt.as_secs_f64(),
         out_len / dt.as_secs_f64(),
         (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
         (out_len / 21.535) / dt.as_secs_f64()
