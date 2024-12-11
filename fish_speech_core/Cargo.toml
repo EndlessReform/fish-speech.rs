@@ -20,6 +20,7 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 
 [dependencies]
 anyhow = "1.0.86"
+approx = "0.5.1"
 byteorder = "1.5.0"
 candle-core = "0.7.2"
 candle-flash-attn = { version = "0.7.2", optional = true }

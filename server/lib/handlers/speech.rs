@@ -12,6 +12,7 @@ use fish_speech_core::models::text2semantic::utils::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 async fn generate_pcm_chunk(
@@ -53,6 +54,7 @@ async fn generate_pcm_chunk(
         }
     };
 
+    let vocoder_start = Instant::now();
     let vocoder = state.vocoder_model.clone();
     let feature_lengths = Tensor::from_slice(
         &[semantic_tokens
@@ -63,7 +65,7 @@ async fn generate_pcm_chunk(
     )
     .context("Failed to create feature lengths tensor")?;
 
-    vocoder
+    let out = vocoder
         .decode(
             &semantic_tokens
                 .unsqueeze(0)
@@ -72,8 +74,12 @@ async fn generate_pcm_chunk(
         )
         .context("Failed to decode audio")?
         .to_dtype(DType::F32)
-        .context("Failed to convert to F32")?
-        .squeeze(0)
+        .context("Failed to convert to F32")?;
+
+    let duration = vocoder_start.elapsed();
+    println!("Vocoding took: {} ms", duration.as_millis());
+
+    out.squeeze(0)
         .context("Failed first squeeze")?
         .squeeze(0)
         .context("Failed second squeeze")
@@ -126,16 +132,23 @@ async fn generate_speech_streaming(
 
     let stream = async_stream::stream! {
         for (i, prompt) in prompts.chunks.iter().enumerate() {
+            println!("Generating chunk {} of {}", i, prompts.chunks.len());
             match generate_pcm_chunk(&stream_state, prompt, prompts.n_conditioning_tokens).await {
                 Ok(pcm_data) => {
                     if i == prompts.chunks.len() - 1 {
                         let mut model = stream_state.semantic_model.lock().await;
                         model.clear_slow_layer_caches();
                     };
-                    let resampled_pcm: Vec<f32> = resample(&pcm_data, SRC_RATE, DST_RATE)
+                    let resample_start = std::time::Instant::now();
+                    let resampled_pcm: Tensor = resample(&pcm_data.unsqueeze(0).unwrap(), SRC_RATE, DST_RATE)
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+                        .flatten_all()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                    let resampled_pcm = resampled_pcm
                         .to_vec1::<f32>()
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("PCM generation failed: {}", e)))?;
+                    let duration = resample_start.elapsed();
+                    println!("CPU resampling took: {:?}", duration);
                     let mut encoder = encoder.lock().await;
                     match encoder.encode_pcm(&resampled_pcm) {
                         Ok(encoded) => {

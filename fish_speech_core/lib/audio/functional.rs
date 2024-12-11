@@ -1,16 +1,19 @@
 use candle_core::{Result, Tensor};
+use std::time::Instant;
 
 pub fn resample(pcm_data: &Tensor, from_rate: u32, to_rate: u32) -> Result<Tensor> {
+    let woolgather_start = Instant::now();
     let device = pcm_data.device();
     let (num_channels, num_frames) = pcm_data.dims2()?;
+    println!("PCM Device: {:?}, frames: {:?}", device, num_frames);
 
     // Use f64 for ratio and length calculations for better precision with large numbers
     let resample_ratio = to_rate as f64 / from_rate as f64;
     let output_len = (num_frames as f64 * resample_ratio).ceil() as usize;
 
     // Create index tensors
-    let input_indices = (Tensor::arange(0f32, output_len as f32, device)?
-        .to_dtype(candle_core::DType::F64)?
+    let input_indices = (Tensor::arange(0f64, output_len as f64, device)?
+        // .to_dtype(candle_core::DType::F64)?
         / resample_ratio)?;
     let input_indices_floor = input_indices.floor()?.to_dtype(candle_core::DType::U32)?;
     let input_indices_ceil = input_indices
@@ -23,6 +26,8 @@ pub fn resample(pcm_data: &Tensor, from_rate: u32, to_rate: u32) -> Result<Tenso
         .sub(&input_indices_floor.to_dtype(candle_core::DType::F64)?)?
         .to_dtype(candle_core::DType::F32)?;
     let one_minus_t = Tensor::ones(t.shape(), pcm_data.dtype(), device)?.sub(&t)?;
+    let woolgather_end = woolgather_start.elapsed();
+    println!("Woogathering: {:?}", woolgather_end);
 
     // Gather values for interpolation
     let pcm_data_flat = pcm_data.flatten_all()?;
