@@ -9,8 +9,8 @@ pub fn resample(pcm_data: &Tensor, from_rate: u32, to_rate: u32) -> Result<Tenso
     let output_len = (num_frames as f64 * resample_ratio).ceil() as usize;
 
     // Create index tensors
-    let input_indices = (Tensor::arange(0f32, output_len as f32, device)?
-        .to_dtype(candle_core::DType::F64)?
+    let input_indices = (Tensor::arange(0f64, output_len as f64, device)?
+        // .to_dtype(candle_core::DType::F64)?
         / resample_ratio)?;
     let input_indices_floor = input_indices.floor()?.to_dtype(candle_core::DType::U32)?;
     let input_indices_ceil = input_indices

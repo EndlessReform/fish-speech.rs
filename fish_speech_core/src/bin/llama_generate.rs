@@ -4,7 +4,7 @@ use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::{
     encode::PromptEncoder,
-    generate::generate,
+    generate::generate_blocking,
     sample::{load_prompt_text, SamplingArgs},
 };
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
@@ -94,7 +94,7 @@ fn generate_long(
     //     tokenizer.decode(&speaker_tokens, false).unwrap()
     // );
 
-    let res = generate(
+    let res = generate_blocking(
         model,
         &final_prompt,
         args.max_new_tokens,
