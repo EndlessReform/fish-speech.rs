@@ -9,3 +9,6 @@ fake.wav
 voices
 !voices-template/default.npy
 .DS_Store
+*.pth
+.ipynb_checkpoints
+silence_dataset

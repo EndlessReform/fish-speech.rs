@@ -53,6 +53,7 @@ tokio-util = "0.7.12"
 tower = "0.5.1"
 tower-http = { version = "0.6.2", features = ["cors"] }
 tracing = "0.1.40"
+zip = "2.2.1"
 
 [dependencies.fish_speech_core]
 path = "../fish_speech_core"
