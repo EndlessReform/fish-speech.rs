@@ -247,12 +247,12 @@ cargo run --release --bin vocoder -- --fish-version 1.2 --checkpoint ./checkpoin
 ## License
 
 > [!WARNING]
-> This codebase is licensed under the original CC-BY-NC-SA-4.0 license. For non-commercial use only!
+> This codebase is licensed under the original Apache 2.0 license. Feel free to use however you want. However, the Fish Speech weights are CC-BY-NC-SA-4.0 and for non-commercial use only!
 >
 > Please support the original authors by using the [official API](https://fish.audio/go-api/) for production.
 
 This model is permissively licensed under the BY-CC-NC-SA-4.0 license.
-The source code is released under BSD-3-Clause license.
+The source code is released under Apache 2.0 license.
 
 Massive thanks also go to:
 
