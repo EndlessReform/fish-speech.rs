@@ -111,10 +111,38 @@ temp_file = "temp.wav"
 audio.stream_to_file(temp_file)
 ```
 
-### Configuring voices
+### Temporary voice cloning
+
+To clone a voice, you'll need a WAV file and a transcription. Suppose you want to add speaker `alice`, who says "Hello world" in file `fake.wav`. 
+
+Make a POST request to the `/v1/audio/encoding` endpoint, with:
+- fake.wav as file body
+- `id` and `prompt` as URL-encoded query parameters
+
+Example with curl:
+
+```bash
+curl -X POST "http://localhost:3000/v1/audio/encoding?id=alice&prompt=Hello%20world" \
+  -F "file=@fake.wav" \
+  --output alice.npy
+```
+
+You can check that your voice was added by hitting the `/v1/voices` debug endpoint:
+
+```bash
+curl http://localhost:3000/v1/voices
+# Returns ['default', 'alice']
+```
+
+This will return a .npy file with your input audio as encoded tokens. After this, the `alice` voice will be usable _as long as the server is running_, and will be deleted on shutdown.
+
+If you want to save this voice, you can use the `.npy` file returned to add it to the voices on startup: see below.
+
+
+### Persisting cloned voices
 
 > [!NOTE]
-> Yes, this sucks. Adding voices to the index at runtime and persisting them to disk is a top priority.
+> Yes, this sucks. Persisting encoded voices to disk is a top priority.
 
 Open up the `voices-template/index.json` file. It should look something like:
 
@@ -130,20 +158,8 @@ The voices directory contains:
 - **This index**, mapping speaker names to the text in their speaker conditioning audio
 - **Speaker conditioning files**, where the filename is the _name_ of the speaker and the audio is the _speaker conditioning_ value (ex. `default.npy`)
 
-How do you get a speaker conditioning file? The server has an API endpoint `/v1/speakers/encode`, which takes a WAV file input and returns that file's encoding.
 
-Let's say you have a WAV file `fake.wav` for speaker name `alice`, where Alice says:
-
-> I–I hardly know, sir, just at present–at least I know who I WAS when I got up this morning, but I think I must have been changed several times since then.
-
-Make an API request to the server–for example, with curl:
-
-```bash
-curl -X POST http://localhost:3000/v1/audio/encoding \
-  -F "file=@fake.wav" \
-  --output alice.npy
-```
-
+Take the `.npy` file you got from runtime encoding and rename it to your speaker ID: ex. if the ID is "alice", then rename it to `alice.npy`.
 Then move `alice.npy` to your voices folder. In `index.json`, add the key:
 
 ```json
