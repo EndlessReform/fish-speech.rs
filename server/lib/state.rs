@@ -22,7 +22,7 @@ pub struct AppState {
     pub spec_transform: Arc<LogMelSpectrogram>,
     pub tokenizer: Arc<Tokenizer>,
     pub device: Device,
-    pub voices: Arc<HashMap<String, Tensor>>,
+    pub voices: Arc<Mutex<HashMap<String, Tensor>>>,
     pub default_voice: Arc<Tensor>,
     pub temp: f64,
     pub top_p: f64,

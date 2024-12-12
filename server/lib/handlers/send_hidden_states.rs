@@ -26,6 +26,8 @@ pub async fn generate_hidden_states(
 ) -> Result<Response<Body>, AppError> {
     let voice_embedding = state
         .voices
+        .lock()
+        .await
         .get(&request.speaker_id)
         .unwrap_or(&state.default_voice)
         .clone();

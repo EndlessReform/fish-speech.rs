@@ -80,7 +80,7 @@ async fn generate_pcm_chunk(
         temp: state.temp,
         top_p: state.top_p,
         top_k: 256,
-        repetition_penalty: 1.2,
+        repetition_penalty: 1.35,
     };
 
     let (semantic_tokens, _) = server_lm_generate_blocking(
@@ -200,6 +200,8 @@ pub async fn generate_speech(
 ) -> Result<Response<Body>, AppError> {
     let voice_embedding = state
         .voices
+        .lock()
+        .await
         .get(&request.voice)
         .unwrap_or(&state.default_voice)
         .clone();
