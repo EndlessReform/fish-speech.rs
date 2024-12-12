@@ -1,4 +1,8 @@
-use axum::{extract::DefaultBodyLimit, routing::post, Router};
+use axum::{
+    extract::DefaultBodyLimit,
+    routing::{get, post},
+    Router,
+};
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 use clap::Parser;
@@ -13,7 +17,9 @@ use fish_speech_core::{
         },
     },
 };
-use server::handlers::{encode_speech::encode_speaker, speech::generate_speech};
+use server::handlers::{
+    encode_speech::encode_speaker, speech::generate_speech, supported_voices::get_supported_voices,
+};
 use server::load_speaker_prompts;
 use server::state::AppState;
 use std::path::PathBuf;
@@ -178,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
         spec_transform,
         tokenizer,
         device,
-        voices: Arc::new(speakers),
+        voices: Arc::new(Mutex::new(speakers)),
         default_voice: Arc::new(default_speaker),
         temp: args.temp,
         top_p: args.top_p,
@@ -189,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/v1/audio/speech", post(generate_speech))
         .route("/v1/audio/encoding", post(encode_speaker))
+        .route("/v1/voices", get(get_supported_voices))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .layer(
             CorsLayer::new()

@@ -1,13 +1,15 @@
 use super::error::AppError;
 use crate::state::AppState;
+use anyhow::anyhow;
 use axum::{
-    extract::{Multipart, State},
+    extract::{Multipart, Query, State},
     http::StatusCode,
     response::Response,
 };
 use candle_core::Tensor;
 use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::functional;
+use fish_speech_core::models::text2semantic::utils::encode::PromptEncoder;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +35,7 @@ pub fn tensor_to_npy_bytes(tensor: &Tensor) -> anyhow::Result<Vec<u8>> {
 
 pub async fn encode_speaker(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
     let start_total = Instant::now();
@@ -61,6 +64,22 @@ pub async fn encode_speaker(
     let start_encode = Instant::now();
     let result = state.encoder_model.encode(&mels)?.squeeze(0)?;
     let encode_time = start_encode.elapsed().as_secs_f32();
+    if let (Some(id), Some(prompt)) = (params.get("id"), params.get("prompt")) {
+        println!("Adding id: {}", id);
+        let mut speaker_map = state.voices.lock().await;
+        let prompt_encoder = PromptEncoder::new(
+            &state.tokenizer,
+            &state.device,
+            state.semantic_config.num_codebooks,
+            state.model_type,
+        );
+        if speaker_map.contains_key(id) {
+            return Err(AppError(anyhow!("ID already exists on server: {}", id)));
+        }
+        let new_prompt = prompt_encoder
+            .encode_conditioning_prompt(prompt, &result.to_dtype(candle_core::DType::U32)?)?;
+        speaker_map.insert(id.to_owned(), new_prompt);
+    }
 
     let npy_bytes = tensor_to_npy_bytes(&result)?;
 
