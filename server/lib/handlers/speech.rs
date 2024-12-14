@@ -8,9 +8,7 @@ use candle_core::{DType, Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::models::text2semantic::utils::encode::EncodedChunks;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks,
-    generate::{generate_blocking, generate_blocking_with_hidden},
-    sample::SamplingArgs,
+    encode::encode_chunks, generate::generate_blocking_with_hidden, sample::SamplingArgs,
     text::preprocess_text,
 };
 use serde::{Deserialize, Serialize};
@@ -80,7 +78,7 @@ async fn generate_pcm_chunk(
         temp: state.temp,
         top_p: state.top_p,
         top_k: 256,
-        repetition_penalty: 1.35,
+        repetition_penalty: 1.3,
     };
 
     let (semantic_tokens, _) = server_lm_generate_blocking(
