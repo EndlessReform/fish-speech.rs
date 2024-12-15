@@ -78,7 +78,7 @@ pub fn generate_blocking_with_hidden(
             k: sampling_args.top_k,
         },
     };
-    let mut fast_logits_processor = LogitsProcessor::from_sampling(42, sampling);
+    let mut fast_logits_processor = LogitsProcessor::from_sampling(rand::random::<u64>(), sampling);
     let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
         .map(|_| {
             RepPenProcessor::new(

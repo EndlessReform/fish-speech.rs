@@ -8,9 +8,7 @@ use candle_core::{DType, Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::models::text2semantic::utils::encode::EncodedChunks;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks,
-    generate::{generate_blocking, generate_blocking_with_hidden},
-    sample::SamplingArgs,
+    encode::encode_chunks, generate::generate_blocking_with_hidden, sample::SamplingArgs,
     text::preprocess_text,
 };
 use serde::{Deserialize, Serialize};
@@ -26,11 +24,14 @@ pub async fn server_lm_generate_blocking(
     n_conditioning_tokens: usize,
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>), anyhow::Error> {
+    // Arbitrary number
+    let max_tokens: usize = 768;
+
     let mut model = state.semantic_model.lock().await;
     let (tokens, hidden_states) = generate_blocking_with_hidden(
         &mut model,
         &encoded_input,
-        1024,
+        max_tokens,
         state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
         state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
         sampling_args,
@@ -38,8 +39,32 @@ pub async fn server_lm_generate_blocking(
     )
     .context("Failed to generate tokens")?;
 
+    let mut tokens = tokens;
+    let mut hidden_states = hidden_states;
     // It's the caller's responsibility to do final clear
     model.clear_slow_caches_until(n_conditioning_tokens)?;
+    if tokens.dim(D::Minus1)? == max_tokens {
+        println!("Failed generation suspected. Rerolling once");
+        let (new_tokens, new_hidden_states) = generate_blocking_with_hidden(
+            &mut model,
+            &encoded_input,
+            1024,
+            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
+            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+            sampling_args,
+            collect_hidden_states,
+        )
+        .context("Failed to generate tokens")?;
+        if new_tokens.dim(D::Minus1)? != max_tokens {
+            tokens = new_tokens;
+            hidden_states = new_hidden_states;
+        } else {
+            anyhow::bail!(
+                "Encoded input failed for second time. Bailing: {:?}",
+                encoded_input
+            );
+        }
+    }
 
     let tokens = match state.model_type {
         fish_speech_core::models::vqgan::config::WhichModel::Fish1_5 => tokens,
@@ -80,7 +105,7 @@ async fn generate_pcm_chunk(
         temp: state.temp,
         top_p: state.top_p,
         top_k: 256,
-        repetition_penalty: 1.35,
+        repetition_penalty: 1.3,
     };
 
     let (semantic_tokens, _) = server_lm_generate_blocking(
