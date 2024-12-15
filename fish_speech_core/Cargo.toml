@@ -16,6 +16,7 @@ cuda = [
 ]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
+mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
 
 
 [dependencies]
