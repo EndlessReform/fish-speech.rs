@@ -11,6 +11,7 @@ use fish_speech_core::models::text2semantic::utils::{
     encode::encode_chunks, generate::generate_blocking_with_hidden, sample::SamplingArgs,
     text::preprocess_text,
 };
+use fish_speech_core::models::vqgan::config::{WhichFishVersion, WhichLM};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,13 +28,11 @@ pub async fn server_lm_generate_blocking(
     // Arbitrary number
     let max_tokens: usize = 768;
 
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     let (tokens, hidden_states) = generate_blocking_with_hidden(
         &mut model,
         &encoded_input,
         max_tokens,
-        state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-        state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
         sampling_args,
         collect_hidden_states,
     )
@@ -49,8 +48,6 @@ pub async fn server_lm_generate_blocking(
             &mut model,
             &encoded_input,
             1024,
-            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
             sampling_args,
             collect_hidden_states,
         )
@@ -66,8 +63,8 @@ pub async fn server_lm_generate_blocking(
         }
     }
 
-    let tokens = match state.model_type {
-        fish_speech_core::models::vqgan::config::WhichModel::Fish1_5 => tokens,
+    let tokens = match state.lm.model_type {
+        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => tokens,
         _ => tokens
             .broadcast_sub(&Tensor::ones_like(&tokens).context("Failed to create ones tensor")?)
             .context("Failed to broadcast subtract")?,
@@ -102,8 +99,8 @@ async fn generate_pcm_chunk(
     n_conditioning_tokens: usize,
 ) -> anyhow::Result<Tensor> {
     let sampling_args = SamplingArgs {
-        temp: state.temp,
-        top_p: state.top_p,
+        temp: state.lm.temp,
+        top_p: state.lm.top_p,
         top_k: 256,
         repetition_penalty: 1.3,
     };
@@ -135,7 +132,7 @@ async fn generate_speech_blocking(
         all_pcm.extend(pcm);
     }
     println!("Generation complete");
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     // Final cache eviction
     model.clear_slow_layer_caches();
     println!("Final cache cleared");
@@ -171,7 +168,7 @@ async fn generate_speech_streaming(
             match generate_pcm_chunk(&stream_state, prompt, prompts.n_conditioning_tokens).await {
                 Ok(pcm_data) => {
                     if i == prompts.chunks.len() - 1 {
-                        let mut model = stream_state.semantic_model.lock().await;
+                        let mut model = stream_state.lm.model.lock().await;
                         model.clear_slow_layer_caches();
                     };
                     let resample_start = std::time::Instant::now();
@@ -224,23 +221,24 @@ pub async fn generate_speech(
     Json(request): Json<GenerateRequest>,
 ) -> Result<Response<Body>, AppError> {
     let voice_embedding = state
+        .lm
         .voices
         .lock()
         .await
         .get(&request.voice)
-        .unwrap_or(&state.default_voice)
+        .unwrap_or(&state.lm.default_voice)
         .clone();
 
     let state = state.clone();
-    let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+    let num_codebooks = state.lm.model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.input);
     let prompts = encode_chunks(
-        &state.tokenizer,
+        &state.lm.tokenizer,
         chunks,
         &state.device,
         Some(&voice_embedding),
         num_codebooks,
-        state.model_type,
+        state.lm.model_type,
     )?;
 
     if request.response_format == Some("opus".into()) {

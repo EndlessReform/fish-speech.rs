@@ -1,5 +1,5 @@
 use super::text::TextChunk;
-use crate::models::vqgan::config::WhichModel;
+use crate::models::vqgan::config::{WhichFishVersion, WhichLM};
 use candle_core::{DType, Device, Error, IndexOp, Result, Tensor};
 use tokenizers::Tokenizer;
 
@@ -7,7 +7,7 @@ pub struct PromptEncoder<'a> {
     device: Device,
     tokenizer: &'a Tokenizer,
     num_codebooks: usize,
-    model_type: WhichModel,
+    model_type: WhichLM,
 }
 
 impl<'a> PromptEncoder<'a> {
@@ -15,7 +15,7 @@ impl<'a> PromptEncoder<'a> {
         tokenizer: &'a Tokenizer,
         device: &Device,
         num_codebooks: usize,
-        model_type: WhichModel,
+        model_type: WhichLM,
     ) -> Self {
         Self {
             device: device.clone(),
@@ -54,7 +54,7 @@ impl<'a> PromptEncoder<'a> {
         let prefix_string = format!(
             "<|im_start|>assistant\n{}",
             match self.model_type {
-                WhichModel::Fish1_5 => "<|voice|>",
+                WhichLM::Fish(WhichFishVersion::Fish1_5) => "<|voice|>",
                 _ => "",
             }
         );
@@ -67,21 +67,27 @@ impl<'a> PromptEncoder<'a> {
 
         let (_, seqlen) = prompt_tokens.dims2()?;
 
-        let semantic_tokens = if self.model_type == WhichModel::Fish1_5 {
-            // Fish 1.5: get semantic IDs
-            let semantic_start = self.tokenizer.token_to_id("<|semantic:0|>").unwrap();
-            semantic_start as f64 + prompt_tokens.i((0, ..))?
-        } else {
-            // Fish 1.4 and below: Just use semantic
-            let semantic_id = self.tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
-            Tensor::from_vec(vec![semantic_id; seqlen], seqlen, &self.device)
+        let semantic_tokens = match self.model_type {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                // Fish 1.5: get semantic IDs
+                let semantic_start = self.tokenizer.token_to_id("<|semantic:0|>").unwrap();
+                semantic_start as f64 + prompt_tokens.i((0, ..))?
+            }
+            _ => {
+                // Fish 1.4 and below: Just use semantic
+                let semantic_id = self.tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+                Tensor::from_vec(vec![semantic_id; seqlen], seqlen, &self.device)
+            }
         };
         let semantic_tokens = semantic_tokens?.unsqueeze(0)?;
-        let vq_span = if self.model_type == WhichModel::Fish1_5 {
-            Tensor::cat(&[semantic_tokens, prompt_tokens.clone()], 0)
-        } else {
-            let data = prompt_tokens.broadcast_add(&Tensor::ones_like(&prompt_tokens)?)?;
-            Tensor::cat(&[semantic_tokens, data], 0)
+        let vq_span = match self.model_type {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                Tensor::cat(&[semantic_tokens, prompt_tokens.clone()], 0)
+            }
+            _ => {
+                let data = prompt_tokens.broadcast_add(&Tensor::ones_like(&prompt_tokens)?)?;
+                Tensor::cat(&[semantic_tokens, data], 0)
+            }
         };
         Tensor::cat(&[prefix_tokens, vq_span?, suffix_tokens?], 1)
     }
@@ -109,7 +115,7 @@ pub fn encode_chunks(
     device: &Device,
     cached_speaker: Option<&Tensor>,
     num_codebooks: usize,
-    model_type: WhichModel,
+    model_type: WhichLM,
 ) -> Result<EncodedChunks> {
     let mut encoded_chunks = Vec::new();
 

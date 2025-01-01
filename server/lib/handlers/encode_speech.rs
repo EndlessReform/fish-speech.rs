@@ -66,12 +66,12 @@ pub async fn encode_speaker(
     let encode_time = start_encode.elapsed().as_secs_f32();
     if let (Some(id), Some(prompt)) = (params.get("id"), params.get("prompt")) {
         println!("Adding id: {}", id);
-        let mut speaker_map = state.voices.lock().await;
+        let mut speaker_map = state.lm.voices.lock().await;
         let prompt_encoder = PromptEncoder::new(
-            &state.tokenizer,
+            &state.lm.tokenizer,
             &state.device,
-            state.semantic_config.num_codebooks,
-            state.model_type,
+            state.lm.config.num_codebooks,
+            state.lm.model_type,
         );
         if speaker_map.contains_key(id) {
             return Err(AppError(anyhow!("ID already exists on server: {}", id)));

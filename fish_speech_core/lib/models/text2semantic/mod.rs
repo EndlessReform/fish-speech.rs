@@ -1,5 +1,6 @@
 pub mod utils;
 
+use anyhow;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 #[cfg(feature = "cuda")]
 use candle_gqa_ops::ops::repeat_kv;
@@ -11,6 +12,48 @@ use serde_json;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use tokenizers::Tokenizer;
+
+use super::vqgan::config::{WhichFishVersion, WhichLM};
+
+#[derive(Debug, Clone)]
+pub struct TokenConfig {
+    pub im_end_id: u32,
+    pub pad_id: u32,
+    pub semantic_start_id: u32,
+    pub semantic_end_id: Option<u32>,
+}
+
+impl TokenConfig {
+    pub fn new(
+        model: WhichLM,
+        tokenizer: &Tokenizer,
+        config: &BaseModelArgs,
+    ) -> anyhow::Result<Self> {
+        let im_end_id = tokenizer
+            .token_to_id("<|im_end|>")
+            .ok_or(anyhow::anyhow!("Tokenizer does not have <|im_end|>"))?;
+        let semantic_start_id = match model {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012)
+            }
+            _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+        };
+        let semantic_end_id = match model {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                tokenizer.token_to_id(&format!("<|semantic:{}|>", config.codebook_size - 1))
+            }
+            _ => None,
+        };
+        let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+        Ok(Self {
+            im_end_id,
+            pad_id,
+            semantic_start_id,
+            semantic_end_id,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
@@ -387,16 +430,16 @@ pub struct DualARTransformer {
     fast_norm: RmsNorm,
     freqs_cis: (Tensor, Tensor),
     pub cfg: BaseModelArgs,
-    semantic_start_id: i64,
-    semantic_end_id: Option<i64>,
+    pub token_config: TokenConfig,
+    pub model_type: WhichLM,
 }
 
 impl DualARTransformer {
     pub fn load(
         vb: &VarBuilder,
         cfg: &BaseModelArgs,
-        semantic_start_id: i64,
-        semantic_end_id: Option<i64>,
+        token_config: &TokenConfig,
+        model_type: WhichLM,
     ) -> Result<Self> {
         let embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("embeddings"))?;
         let codebook_embeddings = Embedding::new(
@@ -450,8 +493,8 @@ impl DualARTransformer {
             norm,
             cfg: cfg.clone(),
             freqs_cis,
-            semantic_start_id,
-            semantic_end_id,
+            token_config: token_config.clone(),
+            model_type,
         })
     }
 
@@ -480,11 +523,12 @@ impl DualARTransformer {
             .unsqueeze(1)?,
         )?;
         let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
-        let emb_mask = match self.semantic_end_id {
+        // Keep codes under PAD if Fish 1.4, <|semantic:start_id|> to <|semantic:end_id|> if 1.5+
+        let emb_mask = match self.token_config.semantic_end_id {
             Some(end_id) => semantic_tokens
                 .le(end_id)?
-                .mul(&semantic_tokens.ge(self.semantic_start_id)?),
-            None => semantic_tokens.eq(self.semantic_start_id),
+                .mul(&semantic_tokens.ge(self.token_config.semantic_start_id)?),
+            None => semantic_tokens.eq(self.token_config.semantic_start_id),
         }?
         .unsqueeze(D::Minus1)?
         .to_dtype(codebook_emb.dtype())?;

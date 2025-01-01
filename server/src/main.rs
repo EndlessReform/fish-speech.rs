@@ -9,9 +9,9 @@ use clap::Parser;
 use fish_speech_core::{
     audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
     models::{
-        text2semantic::{BaseModelArgs, DualARTransformer},
+        text2semantic::{BaseModelArgs, DualARTransformer, TokenConfig},
         vqgan::{
-            config::{FireflyConfig, WhichModel},
+            config::{FireflyConfig, WhichFishVersion, WhichLM, WhichModel},
             decoder::FireflyDecoder,
             encoder::FireflyEncoder,
         },
@@ -21,7 +21,7 @@ use server::handlers::{
     encode_speech::encode_speaker, speech::generate_speech, supported_voices::get_supported_voices,
 };
 use server::load_speaker_prompts;
-use server::state::AppState;
+use server::state::{AppState, LMState};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -82,8 +82,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
-    let vb_lm = match args.fish_version {
-        WhichModel::Fish1_2 => {
+    let lm_version = WhichLM::from_model(args.fish_version);
+    let vb_lm = match lm_version {
+        WhichLM::Fish(WhichFishVersion::Fish1_2) => {
             VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
         }
         _ => unsafe {
@@ -133,34 +134,29 @@ async fn main() -> anyhow::Result<()> {
         _ => FireflyConfig::fish_speech_1_4(),
     };
 
-    let semantic_start_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
-        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
-    } as i64;
-    let semantic_end_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer
-            .token_to_id(&format!(
-                "<|semantic:{}|>",
-                semantic_config.codebook_size - 1
-            ))
-            .map(|id| id as i64),
-        _ => None,
-    };
+    let lm_version = WhichLM::from_model(args.fish_version.clone());
+    let semantic_token_config = TokenConfig::new(lm_version.clone(), &tokenizer, &semantic_config)?;
     let semantic_model = Arc::new(Mutex::new(DualARTransformer::load(
         &vb_lm,
         &semantic_config,
-        semantic_start_id,
-        semantic_end_id,
+        &semantic_token_config,
+        lm_version.clone(),
     )?));
+
+    // TODO do not merge, this will be removed in next PR, solely to get the compiler to shut up
+    let hifigan_fish_version = match args.fish_version {
+        WhichModel::Fish1_2 => WhichFishVersion::Fish1_2,
+        _ => WhichFishVersion::Fish1_4,
+    };
     let vocoder_model = Arc::new(FireflyDecoder::load(
         &vb_firefly,
         &firefly_config,
-        &args.fish_version,
+        &hifigan_fish_version,
     )?);
     let encoder_model = Arc::new(FireflyEncoder::load(
         vb_encoder.clone(),
         &firefly_config,
-        &args.fish_version,
+        &hifigan_fish_version,
     )?);
     let dt = start_load.elapsed();
     let spec_transform = Arc::new(LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?);
@@ -171,23 +167,27 @@ async fn main() -> anyhow::Result<()> {
         &tokenizer,
         &device,
         semantic_config.num_codebooks,
-        args.fish_version.clone(),
+        lm_version.clone(),
     )?;
     println!("Loaded {} voices", speakers.len());
 
-    let state = Arc::new(AppState {
-        semantic_model,
-        vocoder_model,
-        encoder_model,
-        semantic_config: Arc::new(semantic_config),
-        firefly_config: Arc::new(firefly_config),
-        spec_transform,
+    let lm_state = LMState {
+        model: semantic_model,
+        model_type: lm_version,
+        config: Arc::new(semantic_config),
         tokenizer,
-        device,
         voices: Arc::new(Mutex::new(speakers)),
         default_voice: Arc::new(default_speaker),
         temp: args.temp,
         top_p: args.top_p,
+    };
+    let state = Arc::new(AppState {
+        lm: Arc::new(lm_state),
+        vocoder_model,
+        encoder_model,
+        firefly_config: Arc::new(firefly_config),
+        spec_transform,
+        device,
         model_type: args.fish_version,
     });
 

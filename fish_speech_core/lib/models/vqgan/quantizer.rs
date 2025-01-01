@@ -1,4 +1,4 @@
-use super::config::{DownsampleFSQConfig, WhichModel};
+use super::config::{DownsampleFSQConfig, WhichFishVersion};
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
 use super::utils::{FishConvNet, FishTransConvNet};
@@ -13,7 +13,11 @@ pub struct DownsampleFiniteScalarQuantizer {
 }
 
 impl DownsampleFiniteScalarQuantizer {
-    pub fn load(vb: VarBuilder, config: &DownsampleFSQConfig, model: &WhichModel) -> Result<Self> {
+    pub fn load(
+        vb: VarBuilder,
+        config: &DownsampleFSQConfig,
+        model: &WhichFishVersion,
+    ) -> Result<Self> {
         let all_dims: Vec<usize> = if let Some(downsample_dims) = config.downsample_dims.clone() {
             std::iter::once(config.input_dim)
                 .chain(downsample_dims.into_iter())

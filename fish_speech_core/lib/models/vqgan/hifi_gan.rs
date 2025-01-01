@@ -1,4 +1,4 @@
-use super::config::{HiFiGANConfig, WhichModel};
+use super::config::{HiFiGANConfig, WhichFishVersion};
 use super::utils::{FishConvNet, FishTransConvNet};
 use candle_core::{Result, Tensor};
 use candle_nn::{Conv1dConfig, ConvTranspose1dConfig, Module, VarBuilder};
@@ -19,7 +19,7 @@ impl ResBlock1 {
         channels: usize,
         kernel_size: usize,
         dilation: &Vec<usize>,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<Self> {
         let mut convs1: Vec<FishConvNet> = vec![];
         let mut convs2: Vec<FishConvNet> = vec![];
@@ -33,7 +33,7 @@ impl ResBlock1 {
                 Conv1dConfig {
                     dilation: *d,
                     padding: match model {
-                        WhichModel::Fish1_2 => get_padding(kernel_size, Some(*d)),
+                        WhichFishVersion::Fish1_2 => get_padding(kernel_size, Some(*d)),
                         _ => 0,
                     },
                     ..Default::default()
@@ -51,11 +51,11 @@ impl ResBlock1 {
                 kernel_size,
                 Conv1dConfig {
                     padding: match model {
-                        WhichModel::Fish1_2 => get_padding(kernel_size, Some(1)),
+                        WhichFishVersion::Fish1_2 => get_padding(kernel_size, Some(1)),
                         _ => 0,
                     },
                     dilation: match model {
-                        WhichModel::Fish1_2 => 1,
+                        WhichFishVersion::Fish1_2 => 1,
                         _ => *d,
                     },
                     ..Default::default()
@@ -94,7 +94,7 @@ impl ParallelBlock {
         channels: usize,
         kernel_sizes: &Vec<usize>,
         dilation_sizes: &Vec<Vec<usize>>,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<Self> {
         let blocks: Result<Vec<ResBlock1>> = kernel_sizes
             .iter()
@@ -124,7 +124,7 @@ pub struct HiFiGAN {
 }
 
 impl HiFiGAN {
-    pub fn load(vb: VarBuilder, cfg: &HiFiGANConfig, model: &WhichModel) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &HiFiGANConfig, model: &WhichFishVersion) -> Result<Self> {
         let conv_pre = FishConvNet::load(
             vb.pp("conv_pre"),
             cfg.num_mels,
@@ -132,7 +132,7 @@ impl HiFiGAN {
             cfg.pre_conv_kernel_size,
             Conv1dConfig {
                 padding: match model {
-                    WhichModel::Fish1_2 => get_padding(cfg.pre_conv_kernel_size, None),
+                    WhichFishVersion::Fish1_2 => get_padding(cfg.pre_conv_kernel_size, None),
                     _ => 0,
                 },
                 ..Default::default()
@@ -156,7 +156,7 @@ impl HiFiGAN {
                 ConvTranspose1dConfig {
                     stride: *u,
                     padding: match model {
-                        WhichModel::Fish1_2 => (k - u) / 2,
+                        WhichFishVersion::Fish1_2 => (k - u) / 2,
                         _ => 0,
                     },
                     ..Default::default()
@@ -186,7 +186,7 @@ impl HiFiGAN {
             cfg.post_conv_kernel_size,
             Conv1dConfig {
                 padding: match model {
-                    WhichModel::Fish1_2 => get_padding(cfg.post_conv_kernel_size, None),
+                    WhichFishVersion::Fish1_2 => get_padding(cfg.post_conv_kernel_size, None),
                     _ => 0,
                 },
                 ..Default::default()

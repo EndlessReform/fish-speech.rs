@@ -25,23 +25,24 @@ pub async fn generate_hidden_states(
     Json(request): Json<GenerateHiddenStatesRequest>,
 ) -> Result<Response<Body>, AppError> {
     let voice_embedding = state
+        .lm
         .voices
         .lock()
         .await
         .get(&request.speaker_id)
-        .unwrap_or(&state.default_voice)
+        .unwrap_or(&state.lm.default_voice)
         .clone();
 
     let state = state.clone();
-    let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+    let num_codebooks = state.lm.model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.text);
     let prompts = encode_chunks(
-        &state.tokenizer,
+        &state.lm.tokenizer,
         chunks,
         &state.device,
         Some(&voice_embedding),
         num_codebooks,
-        state.model_type,
+        state.lm.model_type,
     )?;
 
     let mut all_hidden_states = Vec::new();
@@ -49,8 +50,8 @@ pub async fn generate_hidden_states(
 
     // Non-streaming path stays relatively simple
     let sampling_args = SamplingArgs {
-        temp: state.temp,
-        top_p: state.top_p,
+        temp: state.lm.temp,
+        top_p: state.lm.top_p,
         top_k: 256,
         repetition_penalty: 1.2,
     };
@@ -73,7 +74,7 @@ pub async fn generate_hidden_states(
         }
     }
 
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     // Final cache eviction
     model.clear_slow_layer_caches();
 

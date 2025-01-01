@@ -3,7 +3,9 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
-use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
+use fish_speech_core::models::vqgan::config::{
+    FireflyConfig, WhichCodec, WhichFishVersion, WhichModel,
+};
 use fish_speech_core::models::vqgan::decoder::FireflyDecoder;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -47,13 +49,18 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
 
-    let config = match args.fish_version {
-        WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
+    let encoder_version = WhichCodec::from_model(args.fish_version.clone());
+    let fish_version = match encoder_version {
+        WhichCodec::Mimi => anyhow::bail!("Only official Fish HiFiGAN supported"),
+        WhichCodec::Fish(v) => v,
+    };
+    let config = match fish_version {
+        WhichFishVersion::Fish1_2 => FireflyConfig::fish_speech_1_2(),
         _ => FireflyConfig::fish_speech_1_4(),
     };
-    let vb = match args.fish_version {
+    let vb = match fish_version {
         // NOTE: Requires weights to have weight norm merged!
-        WhichModel::Fish1_2 => VarBuilder::from_pth(
+        WhichFishVersion::Fish1_2 => VarBuilder::from_pth(
             args.checkpoint
                 .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
             dtype,
@@ -73,7 +80,7 @@ fn main() -> Result<()> {
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
     // TODO: Make this configurable from CLI
-    let model = FireflyDecoder::load(&vb, &config, &args.fish_version)?;
+    let model = FireflyDecoder::load(&vb, &config, &fish_version)?;
     let dt = start_load.elapsed();
     println!("Model loaded in {:.2}s", dt.as_secs_f64());
 

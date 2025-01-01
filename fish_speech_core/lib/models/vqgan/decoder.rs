@@ -1,7 +1,7 @@
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 
-use super::config::{FireflyConfig, WhichModel};
+use super::config::{FireflyConfig, WhichFishVersion};
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
 
@@ -19,7 +19,7 @@ pub struct FireflyDecoder {
 }
 
 impl FireflyDecoder {
-    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichFishVersion) -> Result<Self> {
         let quantizer =
             DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
         let head = HiFiGAN::load(vb.pp("head"), &cfg.head, model)?;

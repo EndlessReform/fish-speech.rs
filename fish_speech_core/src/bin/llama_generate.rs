@@ -7,8 +7,8 @@ use fish_speech_core::models::text2semantic::utils::{
     generate::generate_blocking,
     sample::{load_prompt_text, SamplingArgs},
 };
-use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer};
-use fish_speech_core::models::vqgan::config::WhichModel;
+use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer, TokenConfig};
+use fish_speech_core::models::vqgan::config::{WhichFishVersion, WhichLM, WhichModel};
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -17,7 +17,7 @@ fn generate_long(
     tokenizer: &Tokenizer,
     args: &Args,
     device: &Device,
-    model_type: WhichModel,
+    model_type: WhichLM,
 ) -> anyhow::Result<()> {
     let sampling_args = SamplingArgs {
         temp: args.temp,
@@ -48,7 +48,7 @@ fn generate_long(
         .map(|(t, c)| prompt_encoder.encode_conditioning_prompt(t, c))
         .collect();
     let final_conditioning = match model_type {
-        WhichModel::Fish1_5 => {
+        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
             // The upstream hard-codes a system prompt:
             // https://github.com/fishaudio/fish-speech/blame/b11bcf834a97a75073b535838e5f0765f169eb94/tools/llama/generate.py#L756
             // I'm also hard-coding for now to match upstream since I don't know if this actually affects output quality.
@@ -79,8 +79,6 @@ fn generate_long(
     )?;
 
     println!("Loaded prompt with shape {:?}", final_prompt.shape());
-    let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
-    let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
     // For debugging
     let speaker_tokens = final_prompt
         .i((0, ..))?
@@ -93,14 +91,7 @@ fn generate_long(
         tokenizer.decode(&speaker_tokens, false).unwrap()
     );
 
-    let res = generate_blocking(
-        model,
-        &final_prompt,
-        args.max_new_tokens,
-        im_end_id,
-        pad_id,
-        &sampling_args,
-    )?;
+    let res = generate_blocking(model, &final_prompt, args.max_new_tokens, &sampling_args)?;
     res.write_npy(&args.out_path)?;
 
     Ok(())
@@ -183,8 +174,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
 
-    let vb = match args.fish_version {
-        WhichModel::Fish1_2 => {
+    let fish_version = WhichLM::from_model(args.fish_version);
+    let vb = match fish_version {
+        WhichLM::Fish(WhichFishVersion::Fish1_2) => {
             VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
         }
         _ => unsafe {
@@ -196,26 +188,11 @@ fn main() -> anyhow::Result<()> {
         },
     };
 
-    let semantic_start_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
-        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
-    } as i64;
-    let semantic_end_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer
-            .token_to_id(&format!("<|semantic:{}|>", config.codebook_size - 1))
-            .map(|id| id as i64),
-        _ => None,
-    };
+    let token_config = TokenConfig::new(fish_version, &tokenizer, &config)?;
     let mut model =
-        DualARTransformer::load(&vb, &config, semantic_start_id, semantic_end_id).unwrap();
+        DualARTransformer::load(&vb, &config, &token_config, fish_version.clone()).unwrap();
     println!("Model loaded to {:?}", device);
-    generate_long(
-        &mut model,
-        &tokenizer,
-        &args,
-        &device,
-        args.fish_version.clone(),
-    )?;
+    generate_long(&mut model, &tokenizer, &args, &device, fish_version)?;
 
     Ok(())
 }

@@ -5,7 +5,7 @@ pub mod state;
 use candle_core::{Device, Tensor};
 use fish_speech_core::models::text2semantic::utils::encode::PromptEncoder;
 use fish_speech_core::models::text2semantic::utils::sample::load_prompt_text;
-use fish_speech_core::models::vqgan::config::WhichModel;
+use fish_speech_core::models::vqgan::config::WhichLM;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -22,7 +22,7 @@ pub fn load_speaker_prompts(
     tokenizer: &Tokenizer,
     device: &Device,
     num_codebooks: usize,
-    model_type: WhichModel,
+    model_type: WhichLM,
 ) -> anyhow::Result<(HashMap<String, Tensor>, Tensor)> {
     // Load the index file
     let index_path = voice_dir.join("index.json");

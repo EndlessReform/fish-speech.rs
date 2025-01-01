@@ -10,37 +10,67 @@ fn decode_one_token_ar(
     fast_logits_processor: &mut LogitsProcessor,
     x: &Tensor,
     input_pos: usize,
-    im_end_id: u32,
-    pad_id: u32,
     previous_token: Option<Vec<u32>>,
     rep_pens: &mut [RepPenProcessor],
+    audio_only: bool,
 ) -> Result<(Vec<u32>, Tensor, Tensor)> {
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
 
-    let semantic_token = if model.semantic_end_id.is_none() {
-        let pad_prob = slow_logits
-            .i(pad_id as usize)?
-            .to_dtype(DType::F32)?
-            .to_scalar::<f32>()?;
-        let eos_prob = slow_logits
-            .i(im_end_id as usize)?
-            .to_dtype(DType::F32)?
-            .to_scalar::<f32>()?;
+    let semantic_token = if audio_only {
+        if model.token_config.semantic_end_id.is_none() {
+            // Fish 1.2 and 1.4: semantic backbone only samples PAD/<|im_end|>
+            // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
+            let pad_prob = slow_logits
+                .i(model.token_config.pad_id as usize)?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            let eos_prob = slow_logits
+                .i(model.token_config.im_end_id as usize)?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
 
-        // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
-        legacy_softmax_sample(pad_prob, eos_prob, pad_id, im_end_id)
+            legacy_softmax_sample(
+                pad_prob,
+                eos_prob,
+                model.token_config.pad_id,
+                model.token_config.im_end_id,
+            )
+        } else if model.token_config.im_end_id == model.token_config.semantic_start_id - 1 {
+            println!("FISH 1.5");
+            // Fish 1.5: <|im_end|> is right before the semantic range, saving us an indexop and a cat
+            let special_token_range = slow_logits
+                .i(model.token_config.im_end_id as usize..)?
+                .contiguous()?;
+            let shifted_token = fast_logits_processor.sample(&special_token_range)?;
+            shifted_token + model.token_config.im_end_id
+        } else {
+            // Generic DualAR model using Fish 1.5 speaker line
+            // TODO: will still break for inner monologue-style speaker lines
+            let im_end_prob = slow_logits
+                .i(model.token_config.im_end_id as usize)?
+                .contiguous()?
+                .unsqueeze(0)?;
+            // Inefficient but functional if control tokens AFTER semantic range
+            let semantic_token_range = slow_logits
+                .i(model.token_config.semantic_start_id as usize..)?
+                .contiguous()?;
+            let sample_range = Tensor::cat(&[im_end_prob, semantic_token_range], 0)?;
+            let shifted_token = fast_logits_processor.sample(&sample_range)?;
+            if shifted_token == 0 {
+                model.token_config.im_end_id
+            } else {
+                shifted_token - 1 + model.token_config.semantic_start_id
+            }
+        }
     } else {
-        // TODO DO NOT MERGE! Hard-coded hack
-        // let im_end_id = 49152;
-        // Assumes im_end_id will always come after start. Since it's just 1.5 this is fine
-        let special_token_range = slow_logits.i(im_end_id as usize..)?.contiguous()?;
-        let shifted_token = fast_logits_processor.sample(&special_token_range)?;
-        shifted_token + im_end_id
+        // Unconstrained generation: accept the huge vocab size and just sample
+        fast_logits_processor.sample(&slow_logits)?
     };
     let mut codebooks = vec![semantic_token];
     model.clear_fast_layer_caches();
 
+    // TODO: Add short-circuit operation if speaker line is NOT audio
     let mut x = hidden_states;
     for codebook_idx in 0..model.cfg.num_codebooks {
         let logits = model
@@ -67,8 +97,6 @@ pub fn generate_blocking_with_hidden(
     model: &mut DualARTransformer,
     prompt: &Tensor,
     max_new_tokens: usize,
-    im_end_id: u32,
-    pad_id: u32,
     sampling_args: &SamplingArgs,
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>)> {
@@ -102,10 +130,9 @@ pub fn generate_blocking_with_hidden(
         &mut fast_logits_processor,
         prompt,
         input_pos,
-        im_end_id,
-        pad_id,
         None,
         &mut fast_rep_pens,
+        true,
     )?;
     let dt = start_pp.elapsed();
     input_pos += prompt.dim(D::Minus1)?;
@@ -138,10 +165,9 @@ pub fn generate_blocking_with_hidden(
             &mut fast_logits_processor,
             &cur_token,
             input_pos,
-            im_end_id,
-            pad_id,
             Some(previous_token),
             &mut fast_rep_pens,
+            true,
         )?;
         if collect_hidden_states {
             hidden_states.push(hidden_state);
@@ -149,7 +175,7 @@ pub fn generate_blocking_with_hidden(
         previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
-        if next_indices[0] == im_end_id {
+        if next_indices[0] == model.token_config.im_end_id {
             break;
         }
         input_pos += 1;
@@ -177,18 +203,9 @@ pub fn generate_blocking(
     model: &mut DualARTransformer,
     prompt: &Tensor,
     max_new_tokens: usize,
-    im_end_id: u32,
-    pad_id: u32,
     sampling_args: &SamplingArgs,
 ) -> Result<Tensor> {
-    let (out, _) = generate_blocking_with_hidden(
-        model,
-        prompt,
-        max_new_tokens,
-        im_end_id,
-        pad_id,
-        sampling_args,
-        false,
-    )?;
+    let (out, _) =
+        generate_blocking_with_hidden(model, prompt, max_new_tokens, sampling_args, false)?;
     Ok(out)
 }
