@@ -411,7 +411,18 @@ impl DualARTransformer {
             .collect();
         let layers = layers?;
         let norm = RmsNorm::new(vb.get(cfg.dim, "norm.weight")?, cfg.norm_eps);
-        let output = Linear::new(vb.get((cfg.vocab_size, cfg.dim), "output.weight")?, None);
+        let output = Linear::new(
+            vb.get(
+                (cfg.vocab_size, cfg.dim),
+                if cfg.tie_word_embeddings {
+                    "embeddings.weight"
+                } else {
+                    "output.weight"
+                },
+            )?
+            .contiguous()?,
+            None,
+        );
         let fast_embeddings = Embedding::new(
             vb.get((cfg.codebook_size, cfg.dim), "fast_embeddings.weight")?,
             cfg.dim,
@@ -422,7 +433,7 @@ impl DualARTransformer {
         let fast_layers = fast_layers?;
         let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
         let fast_output = Linear::new(
-            vb.get((cfg.dim, cfg.codebook_size), "fast_output.weight")?,
+            vb.get((cfg.codebook_size, cfg.dim), "fast_output.weight")?,
             None,
         );
         let freqs_cis = precompute_freqs_cis(cfg, vb.device(), vb.dtype())?;

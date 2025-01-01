@@ -31,6 +31,8 @@ fn decode_one_token_ar(
         // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
         legacy_softmax_sample(pad_prob, eos_prob, pad_id, im_end_id)
     } else {
+        // TODO DO NOT MERGE! Hard-coded hack
+        // let im_end_id = 49152;
         // Assumes im_end_id will always come after start. Since it's just 1.5 this is fine
         let special_token_range = slow_logits.i(im_end_id as usize..)?.contiguous()?;
         let shifted_token = fast_logits_processor.sample(&special_token_range)?;

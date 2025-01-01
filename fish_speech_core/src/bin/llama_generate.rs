@@ -1,5 +1,5 @@
 use anyhow::Error;
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::models::text2semantic::utils::{
@@ -82,17 +82,16 @@ fn generate_long(
     let im_end_id = tokenizer.token_to_id("<|im_end|>").unwrap_or(4);
     let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
     // For debugging
-    //
-    // let speaker_tokens = final_prompt
-    //     .i((0, ..))?
-    //     .flatten_all()?
-    //     .to_device(&Device::Cpu)?
-    //     .to_vec1::<u32>()?;
-    // println!("Input tokens:\n{:?}", &speaker_tokens);
-    // println!(
-    //     "Input prompt:\n{}",
-    //     tokenizer.decode(&speaker_tokens, false).unwrap()
-    // );
+    let speaker_tokens = final_prompt
+        .i((0, ..))?
+        .flatten_all()?
+        .to_device(&Device::Cpu)?
+        .to_vec1::<u32>()?;
+    println!("Input tokens:\n{:?}", &speaker_tokens);
+    println!(
+        "Input prompt:\n{}",
+        tokenizer.decode(&speaker_tokens, false).unwrap()
+    );
 
     let res = generate_blocking(
         model,
@@ -102,12 +101,6 @@ fn generate_long(
         pad_id,
         &sampling_args,
     )?;
-    model.clear_slow_layer_caches();
-    let res = match model_type {
-        WhichModel::Fish1_5 => res,
-        _ => res.broadcast_sub(&Tensor::ones_like(&res)?)?,
-    };
-    // let res = res.broadcast_sub(&Tensor::ones_like(&res)?)?;
     res.write_npy(&args.out_path)?;
 
     Ok(())
