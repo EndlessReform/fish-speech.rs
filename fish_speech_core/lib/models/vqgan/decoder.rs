@@ -16,6 +16,7 @@ pub struct FireflyDecoder {
     quantizer: DownsampleFiniteScalarQuantizer,
     head: HiFiGAN,
     cfg: FireflyConfig,
+    pub device: Device,
 }
 
 impl FireflyDecoder {
@@ -28,6 +29,7 @@ impl FireflyDecoder {
             quantizer,
             head,
             cfg: cfg.clone(),
+            device: vb.device().clone(),
         })
     }
 

@@ -51,18 +51,15 @@ pub async fn encode_speaker(
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
     }
-
-    let audio = functional::resample(
-        &audio,
-        sr,
-        state.firefly_config.spec_transform.sample_rate as u32,
-    )?
-    .unsqueeze(0)?;
-
-    let mels = state.spec_transform.forward(&audio)?;
+    let audio = functional::resample(&audio, sr, state.sample_rate as u32)?;
+    // TODO handle batched audio
+    let result = state
+        .codec
+        .encode_batch(&audio.unsqueeze(0)?)
+        .await?
+        .squeeze(0)?;
 
     let start_encode = Instant::now();
-    let result = state.encoder_model.encode(&mels)?.squeeze(0)?;
     let encode_time = start_encode.elapsed().as_secs_f32();
     if let (Some(id), Some(prompt)) = (params.get("id"), params.get("prompt")) {
         println!("Adding id: {}", id);
@@ -83,8 +80,7 @@ pub async fn encode_speaker(
 
     let npy_bytes = tensor_to_npy_bytes(&result)?;
 
-    let audio_duration =
-        audio.dim(2)? as f32 / state.firefly_config.spec_transform.sample_rate as f32;
+    let audio_duration = audio.dim(2)? as f32 / state.sample_rate as f32;
     println!("Encoding RTF: {:.1}x", audio_duration / encode_time);
     println!(
         "Total RTF: {:.1}x",

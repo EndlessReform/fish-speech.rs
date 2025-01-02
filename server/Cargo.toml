@@ -13,8 +13,14 @@ cuda = [
     "candle-nn/cuda",
     "candle-transformers/cuda",
     "dep:candle-gqa-ops",
+    "moshi/cuda",
 ]
-metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+metal = [
+    "candle-core/metal",
+    "candle-nn/metal",
+    "candle-transformers/metal",
+    "moshi/metal",
+]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 
 
@@ -33,8 +39,9 @@ candle-transformers = "0.7.2"
 clap = { version = "4.5.16", features = ["derive"] }
 futures = "0.3.31"
 futures-util = "0.3.31"
-hf-hub = "0.3.2"
+hf-hub = "0.4.1"
 indicatif = "0.17.8"
+moshi = "0.2.4"
 num = "0.4.3"
 num-traits = "0.2.19"
 ogg = { version = "0.9.1", features = ["tokio-util", "async"] }

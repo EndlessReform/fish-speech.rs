@@ -1,5 +1,5 @@
+pub mod audio;
 pub mod handlers;
-pub mod opus;
 pub mod state;
 
 use candle_core::{Device, Tensor};

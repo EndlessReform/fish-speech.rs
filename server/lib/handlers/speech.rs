@@ -1,10 +1,10 @@
 use super::error::AppError;
-use crate::opus::OpusEncoder;
+use crate::audio::opus::OpusEncoder;
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
-use candle_core::{DType, Tensor, D};
+use candle_core::{Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::models::text2semantic::utils::encode::EncodedChunks;
 use fish_speech_core::models::text2semantic::utils::{
@@ -78,14 +78,8 @@ pub async fn vocode_semantic_tokens(
     semantic_tokens: &Tensor,
 ) -> anyhow::Result<Tensor> {
     let vocoder_start = Instant::now();
-    let feature_lengths =
-        Tensor::from_slice(&[semantic_tokens.dim(D::Minus1)? as u32], 1, &state.device)?;
 
-    let out = state
-        .vocoder_model
-        .decode(&semantic_tokens.unsqueeze(0)?, &feature_lengths)?
-        .to_dtype(DType::F32)?;
-
+    let out = state.codec.decode_batch(semantic_tokens).await?;
     let duration = vocoder_start.elapsed();
     println!("Vocoding took: {} ms", duration.as_millis());
 
@@ -99,8 +93,8 @@ async fn generate_pcm_chunk(
     n_conditioning_tokens: usize,
 ) -> anyhow::Result<Tensor> {
     let sampling_args = SamplingArgs {
-        temp: state.lm.temp,
-        top_p: state.lm.top_p,
+        temp: state.lm.default_temp,
+        top_p: state.lm.default_top_p,
         top_k: 256,
         repetition_penalty: 1.3,
     };

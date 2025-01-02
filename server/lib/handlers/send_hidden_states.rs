@@ -50,8 +50,8 @@ pub async fn generate_hidden_states(
 
     // Non-streaming path stays relatively simple
     let sampling_args = SamplingArgs {
-        temp: state.lm.temp,
-        top_p: state.lm.top_p,
+        temp: state.lm.default_temp,
+        top_p: state.lm.default_top_p,
         top_k: 256,
         repetition_penalty: 1.2,
     };
