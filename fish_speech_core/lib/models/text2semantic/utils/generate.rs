@@ -1,5 +1,5 @@
 use super::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
-use crate::models::text2semantic::DualARTransformer;
+use crate::models::{text2semantic::DualARTransformer, vqgan::config::WhichLM};
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -188,13 +188,17 @@ pub fn generate_blocking_with_hidden(
         true => Tensor::cat(&hidden_states, 0).ok(),
         false => None,
     };
+    let frame_rate = match model.model_type {
+        WhichLM::DualAR => 12.5,
+        _ => 21.535,
+    };
     println!(
         "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
         out_len,
         dt.as_secs_f64(),
         out_len / dt.as_secs_f64(),
         (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
-        (out_len / 21.535) / dt.as_secs_f64()
+        (out_len / frame_rate) / dt.as_secs_f64()
     );
     Ok((previous_tokens.i((1.., ..))?, hidden_states))
 }

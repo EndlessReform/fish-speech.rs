@@ -40,7 +40,7 @@ pub async fn generate_hidden_states(
         &state.lm.tokenizer,
         chunks,
         &state.device,
-        Some(&voice_embedding),
+        Some(voice_embedding),
         num_codebooks,
         state.lm.model_type,
     )?;

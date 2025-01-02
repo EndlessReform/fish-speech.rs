@@ -113,7 +113,7 @@ pub fn encode_chunks(
     tokenizer: &Tokenizer,
     chunks: Vec<TextChunk>,
     device: &Device,
-    cached_speaker: Option<&Tensor>,
+    cached_speaker: Option<Tensor>,
     num_codebooks: usize,
     model_type: WhichLM,
 ) -> Result<EncodedChunks> {
@@ -124,7 +124,7 @@ pub fn encode_chunks(
     let system_prompt =
         prompt_encoder.encode_text("system", Some("Speak out the provided text"))?;
     let assistant_start = prompt_encoder.encode_vq(None)?;
-    let n_conditioning_tokens = match cached_speaker {
+    let n_conditioning_tokens = match &cached_speaker {
         Some(t) => system_prompt.dim(1)? + t.dim(1)?,
         _ => 0,
     };
@@ -136,7 +136,7 @@ pub fn encode_chunks(
         // Format each chunk with the dialogue markers
         let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
 
-        let encoded = if let Some(conditioning_tokens) = cached_speaker {
+        let encoded = if let Some(conditioning_tokens) = cached_speaker.as_ref() {
             // Assume the preprocessing code from earlier worked fine
             if i == 0 {
                 Tensor::cat(

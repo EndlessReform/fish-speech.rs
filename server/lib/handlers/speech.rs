@@ -215,23 +215,28 @@ pub async fn generate_speech(
     State(state): State<Arc<AppState>>,
     Json(request): Json<GenerateRequest>,
 ) -> Result<Response<Body>, AppError> {
-    let voice_embedding = state
-        .lm
-        .voices
-        .lock()
-        .await
-        .get(&request.voice)
-        .unwrap_or(&state.lm.default_voice)
-        .clone();
+    let voice_embedding = match &*request.voice {
+        "unconditioned" => None,
+        _ => Some(
+            state
+                .lm
+                .voices
+                .lock()
+                .await
+                .get(&request.voice)
+                .unwrap_or(&state.lm.default_voice)
+                .clone(),
+        ),
+    };
 
     let state = state.clone();
-    let num_codebooks = state.lm.model.lock().await.cfg.num_codebooks;
+    let num_codebooks = state.lm.config.num_codebooks;
     let chunks = preprocess_text(&request.input);
     let prompts = encode_chunks(
         &state.lm.tokenizer,
         chunks,
         &state.device,
-        Some(&voice_embedding),
+        voice_embedding,
         num_codebooks,
         state.lm.model_type,
     )?;
