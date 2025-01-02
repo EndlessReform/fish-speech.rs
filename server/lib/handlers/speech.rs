@@ -132,7 +132,8 @@ async fn generate_speech_blocking(
     println!("Final cache cleared");
 
     let mut audio_buf = Vec::new();
-    write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100).context("Failed to write PCM as WAV")?;
+    write_pcm_as_wav(&mut audio_buf, &all_pcm, state.sample_rate)
+        .context("Failed to write PCM as WAV")?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -145,7 +146,7 @@ async fn generate_speech_streaming(
     state: Arc<AppState>,
     prompts: EncodedChunks,
 ) -> Result<Response<Body>, AppError> {
-    const SRC_RATE: u32 = 44100;
+    let src_rate: u32 = state.sample_rate;
     const DST_RATE: u32 = 24000;
 
     // Move all stream setup before the stream definition
@@ -166,7 +167,7 @@ async fn generate_speech_streaming(
                         model.clear_slow_layer_caches();
                     };
                     let resample_start = std::time::Instant::now();
-                    let resampled_pcm: Tensor = resample(&pcm_data.unsqueeze(0).unwrap(), SRC_RATE, DST_RATE)
+                    let resampled_pcm: Tensor = resample(&pcm_data.unsqueeze(0).unwrap(), src_rate, DST_RATE)
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
                         .flatten_all()
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;

@@ -23,8 +23,15 @@ impl Codec {
     pub async fn encode_batch(&self, audio: &Tensor) -> Result<Tensor> {
         match self {
             Codec::Mimi(model_mutex) => {
+                let audio = if audio.rank() == 2 {
+                    &audio.unsqueeze(0)?
+                } else {
+                    audio
+                };
                 let mut model = model_mutex.lock().await;
-                model.encode_batch(audio)
+                let out = model.encode_batch(audio);
+                println!("out: {:?}", out);
+                out
             }
             Codec::HiFiGAN(state) => {
                 let mels = state.spec_transform.forward(&audio)?;
@@ -34,12 +41,17 @@ impl Codec {
     }
 
     pub async fn decode_batch(&self, semantic_tokens: &Tensor) -> Result<Tensor> {
+        let semantic_tokens = if semantic_tokens.rank() == 2 {
+            &semantic_tokens.unsqueeze(0)?
+        } else {
+            semantic_tokens
+        };
         match self {
             Codec::Mimi(model_mutex) => {
                 let mut model = model_mutex.lock().await;
-                let tokens = model.decode_batch(semantic_tokens)?;
+                let tokens = model.decode_batch(semantic_tokens);
                 model.reset();
-                Ok(tokens)
+                tokens
             }
             Codec::HiFiGAN(state) => {
                 let feature_lengths = Tensor::from_slice(
@@ -47,11 +59,6 @@ impl Codec {
                     1,
                     &state.decoder_model.device,
                 )?;
-                let semantic_tokens = if semantic_tokens.rank() == 2 {
-                    &semantic_tokens.unsqueeze(0)?
-                } else {
-                    semantic_tokens
-                };
 
                 state
                     .decoder_model

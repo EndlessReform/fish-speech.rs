@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     response::Response,
 };
-use candle_core::Tensor;
+use candle_core::{Tensor, D};
 use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::functional;
 use fish_speech_core::models::text2semantic::utils::encode::PromptEncoder;
@@ -80,7 +80,7 @@ pub async fn encode_speaker(
 
     let npy_bytes = tensor_to_npy_bytes(&result)?;
 
-    let audio_duration = audio.dim(2)? as f32 / state.sample_rate as f32;
+    let audio_duration = audio.dim(D::Minus1)? as f32 / state.sample_rate as f32;
     println!("Encoding RTF: {:.1}x", audio_duration / encode_time);
     println!(
         "Total RTF: {:.1}x",

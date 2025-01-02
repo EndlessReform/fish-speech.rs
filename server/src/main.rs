@@ -132,9 +132,17 @@ fn load_codec(
                     .checkpoint
                     .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors"),
             };
-            let vb_firefly = match version {
-                WhichFishVersion::Fish1_2 => VarBuilder::from_pth(vb_path, dtype, &device)?,
-                _ => unsafe { VarBuilder::from_mmaped_safetensors(&[vb_path], dtype, &device)? },
+            let vb_decoder = match version {
+                WhichFishVersion::Fish1_2 => VarBuilder::from_pth(vb_path.clone(), dtype, &device)?,
+                _ => unsafe {
+                    VarBuilder::from_mmaped_safetensors(&[vb_path.clone()], dtype, &device)?
+                },
+            };
+            let vb_encoder = match version {
+                WhichFishVersion::Fish1_2 => VarBuilder::from_pth(vb_path, DType::F32, &device)?,
+                _ => unsafe {
+                    VarBuilder::from_mmaped_safetensors(&[vb_path], DType::F32, &device)?
+                },
             };
             let firefly_config = match args.fish_version {
                 WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
@@ -142,12 +150,12 @@ fn load_codec(
             };
 
             let vocoder_model = Arc::new(FireflyDecoder::load(
-                &vb_firefly.clone(),
+                &vb_decoder.clone(),
                 &firefly_config,
                 &version,
             )?);
             let encoder_model = Arc::new(FireflyEncoder::load(
-                vb_firefly.clone(),
+                vb_encoder.clone(),
                 &firefly_config,
                 &version,
             )?);
@@ -165,10 +173,11 @@ fn load_codec(
             ))
         }
         WhichCodec::Mimi => {
-            // TODO make this configurable, I don't really care right now
             let api = Api::new()?;
-            let repo = api.model("kyutai/mimi".to_string());
-            let mimi_path = repo.get("model.safetensors")?;
+            // Yes, this is terrible, but it's literally what their MLX client does
+            // TODO make this configurable, I don't really care right now
+            let repo = api.model("kyutai/moshiko-mlx-bf16".to_string());
+            let mimi_path = repo.get("tokenizer-e351c8d8-checkpoint125.safetensors")?;
             let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[mimi_path], dtype, device) }?;
             // Yes, this is hard-coded. If this ever changes I will care
             let (model, sr) = mimi::Tokenizer::load(vb, num_codebooks)?;
