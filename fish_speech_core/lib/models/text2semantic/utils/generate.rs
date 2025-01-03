@@ -14,6 +14,9 @@ fn decode_one_token_ar(
     rep_pens: &mut [RepPenProcessor],
     audio_only: bool,
 ) -> Result<(Vec<u32>, Tensor, Tensor)> {
+    // Test batching; this is a hack
+    let x = if x.rank() == 2 { &x.unsqueeze(0)? } else { x };
+    println!("X shape in: {:?}", x.shape());
     let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
     let slow_logits = logits.flatten_all()?;
 

@@ -498,19 +498,16 @@ impl DualARTransformer {
         })
     }
 
+    /// Assumes (bsz, n_codes + 1, seqlen)
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        let semantic_tokens = x.i((0, ..))?;
-        let codebook_tokens = x.i((1.., ..))?;
+        let semantic_tokens = x.i((.., 0, ..))?;
+        let codebook_tokens = x.i((.., 1.., ..))?;
         assert!(
             x.dim(D::Minus2)? == self.cfg.num_codebooks + 1,
             "Input tokens must have num_codebooks + 1 codebooks!"
         );
-        // Embed semantic tokens, re-add batch dim if single-batched
-        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?;
-        let semantic_embeds = match semantic_embeds.rank() {
-            2 => semantic_embeds.unsqueeze(0)?,
-            _ => semantic_embeds,
-        };
+        // Embed semantic tokens, re-add codebook dim
+        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?.unsqueeze(1)?;
 
         // Offset the ranges for each codebook so they don't overlap
         let codebook_tokens_shifted = codebook_tokens.broadcast_add(
@@ -533,13 +530,14 @@ impl DualARTransformer {
         .unsqueeze(D::Minus1)?
         .to_dtype(codebook_emb.dtype())?;
         let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
-        let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 0)?;
-        x.sum_keepdim(0)
+        let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 1)?;
+        // Sum on code dimension
+        x.sum(1)
     }
 
     /// Returns (logits, hidden_states)
     pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
-        let seq_len = inp.dim(1)?;
+        let seq_len = inp.dim(D::Minus1)?;
         let mut x = self.embed(inp)?;
 
         // TODO: See if making masks on-the-fly is a performance bottleneck
