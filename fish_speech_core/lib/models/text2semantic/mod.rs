@@ -323,8 +323,15 @@ impl Attention {
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        // TODO: Fix op to handle bsz > 1
         #[cfg(feature = "cuda")]
-        let key_states = repeat_kv(&key_states, n_rep)?;
+        let key_states = match bsz {
+            1 => repeat_kv(&key_states, n_rep)?,
+            _ => key_states
+                .unsqueeze(2)?
+                .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+                .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?,
+        };
 
         #[cfg(not(feature = "cuda"))]
         let value_states = value_states
@@ -332,7 +339,13 @@ impl Attention {
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
         #[cfg(feature = "cuda")]
-        let value_states = repeat_kv(&value_states, n_rep)?;
+        let value_states = match bsz {
+            1 => repeat_kv(&value_states, n_rep)?,
+            _ => value_states
+                .unsqueeze(2)?
+                .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+                .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?,
+        };
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
         let mask = if seqlen > 1 { Some(mask) } else { None };
@@ -535,15 +548,37 @@ impl DualARTransformer {
         x.sum(1)
     }
 
+    /// **Padding mask:**
+    /// Optional 2D (bsz, seqlen) showing which positions need to be masked out for ragged batches.
+    /// 0 is MASK (for PAD token), 1 is KEEP.
+    ///
     /// Returns (logits, hidden_states)
-    pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
-        let seq_len = inp.dim(D::Minus1)?;
+    pub fn forward_generate(
+        &mut self,
+        inp: &Tensor,
+        input_pos: usize,
+        pad_mask: Option<Tensor>,
+    ) -> Result<(Tensor, Tensor)> {
         let mut x = self.embed(inp)?;
+        let (bsz, seq_len, _) = x.dims3()?;
 
-        // TODO: See if making masks on-the-fly is a performance bottleneck
         let mask = match seq_len {
-            1 => &self.get_mask_abs(1, 1, x.device())?,
-            _ => &self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
+            1 => self.get_mask_abs(1, 1, x.device())?,
+            _ => self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
+        };
+        let mask = match pad_mask {
+            Some(key_padding_mask) => {
+                // Unlike in Torch, 0 is keep, 1 is MASK.
+                // We GET 0: mask 1: keep, so flip it
+                // Yes, this is terrible. Candle.rs has no booleans so this is what we got
+                let inverted_padding =
+                    Tensor::ones_like(&key_padding_mask)?.sub(&key_padding_mask)?;
+                let mask = mask.reshape((1, 1, seq_len, seq_len))?;
+                // Logical AND
+                // 0, 0 (keep, keep) -> keep, otherwise 1 (mask)
+                mask.maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
+            }
+            None => mask,
         };
 
         let (cos_full, sin_full) = &self.freqs_cis;
@@ -569,7 +604,7 @@ impl DualARTransformer {
     /// Returns codebook_logits only
     pub fn forward_generate_fast(&mut self, x: &Tensor, input_pos: usize) -> Result<Tensor> {
         let (bsz, seq_len, _) = x.dims3()?;
-        // This is a dirty hack but it will work for now
+        // With KV cache, seqlen for fast layers will only ever be 1 so this is fine
         let fast_mask = Tensor::from_vec(
             vec![u8::from(false); input_pos + 1],
             input_pos + 1,
@@ -577,7 +612,8 @@ impl DualARTransformer {
         )?
         .unsqueeze(0)?
         .repeat(bsz)?;
-        let x = x.reshape((1, 1, ()));
+        // Yes, this is dumb, but we need to start the iterator chain
+        let x: Result<Tensor> = Ok(x.clone());
 
         let (cos_full, sin_full) = &self.freqs_cis;
         let freqs_cis = (

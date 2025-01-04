@@ -26,7 +26,7 @@ pub async fn server_lm_generate_blocking(
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>), anyhow::Error> {
     // Arbitrary number
-    let max_tokens: usize = 768;
+    let max_tokens: usize = 2048;
 
     let mut model = state.lm.model.lock().await;
     let (tokens, hidden_states) = generate_blocking_with_hidden(

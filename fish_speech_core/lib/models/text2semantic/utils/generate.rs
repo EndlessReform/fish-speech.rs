@@ -1,101 +1,282 @@
 use super::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
-use crate::models::{text2semantic::DualARTransformer, vqgan::config::WhichLM};
+use crate::models::{
+    text2semantic::{DualARTransformer, TokenConfig},
+    vqgan::config::{WhichFishVersion, WhichLM},
+};
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
 
-fn decode_one_token_ar(
-    model: &mut DualARTransformer,
-    fast_logits_processor: &mut LogitsProcessor,
+/// Constrains Fish 1.5+ models to <|im_end|> plus <|semantic:n|> range, leaves others untouched
+fn constrain_probs_to_audio(
     x: &Tensor,
-    input_pos: usize,
-    previous_token: Option<Vec<u32>>,
-    rep_pens: &mut [RepPenProcessor],
-    audio_only: bool,
-) -> Result<(Vec<u32>, Tensor, Tensor)> {
-    // Test batching; this is a hack
-    let x = if x.rank() == 2 { &x.unsqueeze(0)? } else { x };
-    println!("X shape in: {:?}", x.shape());
-    let (logits, hidden_states) = model.forward_generate(&x, input_pos)?;
-    let slow_logits = logits.flatten_all()?;
-
-    let semantic_token = if audio_only {
-        if model.token_config.semantic_end_id.is_none() {
-            // Fish 1.2 and 1.4: semantic backbone only samples PAD/<|im_end|>
-            // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
-            let pad_prob = slow_logits
-                .i(model.token_config.pad_id as usize)?
-                .to_dtype(DType::F32)?
-                .to_scalar::<f32>()?;
-            let eos_prob = slow_logits
-                .i(model.token_config.im_end_id as usize)?
-                .to_dtype(DType::F32)?
-                .to_scalar::<f32>()?;
-
-            legacy_softmax_sample(
-                pad_prob,
-                eos_prob,
-                model.token_config.pad_id,
-                model.token_config.im_end_id,
-            )
-        } else if model.token_config.im_end_id == model.token_config.semantic_start_id - 1 {
-            println!("FISH 1.5");
-            // Fish 1.5: <|im_end|> is right before the semantic range, saving us an indexop and a cat
-            let special_token_range = slow_logits
-                .i(model.token_config.im_end_id as usize..)?
-                .contiguous()?;
-            let shifted_token = fast_logits_processor.sample(&special_token_range)?;
-            shifted_token + model.token_config.im_end_id
-        } else {
-            // Generic DualAR model using Fish 1.5 speaker line
-            // TODO: will still break for inner monologue-style speaker lines
-            let im_end_prob = slow_logits
-                .i(model.token_config.im_end_id as usize)?
-                .contiguous()?
-                .unsqueeze(0)?;
-            // Inefficient but functional if control tokens AFTER semantic range
-            let semantic_token_range = slow_logits
-                .i(model.token_config.semantic_start_id as usize..)?
-                .contiguous()?;
-            let sample_range = Tensor::cat(&[im_end_prob, semantic_token_range], 0)?;
-            let shifted_token = fast_logits_processor.sample(&sample_range)?;
-            if shifted_token == 0 {
-                model.token_config.im_end_id
+    model_type: &WhichLM,
+    token_config: &TokenConfig,
+) -> Result<Tensor> {
+    match model_type {
+        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+            if token_config.im_end_id == token_config.semantic_start_id - 1 {
+                // Fish 1.5: <|im_end|> is right before the semantic range, saving us an indexop and a cat
+                x.i((.., .., token_config.im_end_id as usize..))?
+                    .contiguous()
             } else {
-                shifted_token - 1 + model.token_config.semantic_start_id
+                // Generic DualAR model using Fish 1.5 speaker line
+                // TODO: will still break for inner monologue-style speaker lines
+                let im_end_prob = x
+                    .i((.., .., token_config.im_end_id as usize))?
+                    .contiguous()?
+                    .unsqueeze(0)?;
+                // Inefficient but functional if control tokens AFTER semantic range
+                let semantic_token_range = x
+                    .i((.., .., token_config.semantic_start_id as usize..))?
+                    .contiguous()?;
+                Tensor::cat(&[im_end_prob, semantic_token_range], D::Minus1)
             }
         }
-    } else {
-        // Unconstrained generation: accept the huge vocab size and just sample
-        fast_logits_processor.sample(&slow_logits)?
-    };
-    let mut codebooks = vec![semantic_token];
-    model.clear_fast_layer_caches();
-
-    // TODO: Add short-circuit operation if speaker line is NOT audio
-    let mut x = hidden_states;
-    for codebook_idx in 0..model.cfg.num_codebooks {
-        let logits = model
-            .forward_generate_fast(&x, codebook_idx)?
-            .flatten_all()?;
-
-        let logits_adj = match &previous_token {
-            None => logits.clone(),
-            Some(t) => rep_pens[codebook_idx].apply(&logits, t[codebook_idx + 1] as usize)?,
-        };
-        let a = fast_logits_processor.sample(&logits_adj.flatten_all()?)?;
-        let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
-        x = model.fast_embeddings.forward(&a_tensor)?.unsqueeze(0)?;
-        codebooks.push(a);
+        _ => Ok(x.clone()),
     }
-    let codes_tensor =
-        Tensor::from_vec(codebooks.clone(), model.cfg.num_codebooks + 1, x.device())?
-            .unsqueeze(D::Minus1)?;
-    Ok((codebooks, codes_tensor, x))
 }
 
-/// Takes a conditioning sequence as input and generates as many tokens as requested
+/// Put back tokens after constrained generation sampling
+fn rescale_semantic_tokens(
+    tokens: Vec<u32>,
+    model_type: &WhichLM,
+    token_config: &TokenConfig,
+) -> Vec<u32> {
+    match model_type {
+        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => tokens
+            .iter()
+            .map(|token| {
+                if token_config.im_end_id == token_config.semantic_start_id - 1 {
+                    token + token_config.im_end_id
+                } else if *token == 0 {
+                    token_config.im_end_id
+                } else {
+                    token - 1 + token_config.semantic_start_id
+                }
+            })
+            .collect(),
+        _ => tokens,
+    }
+}
+
+// fn prefill_batch(
+//     model: &mut DualARTransformer,
+//     x: &Tensor,
+//     sampling: &Sampling,
+//     key_padding_mask: Option<Tensor>,
+//     audio_only: bool,
+//     rep_pens: &mut [RepPenProcessor],
+// ) -> Result<(Vec<Vec<u32>>, Tensor)> {
+//     model.clear_slow_layer_caches();
+//     let (logits, hidden_states) = model.forward_generate(x, 0, key_padding_mask)?;
+
+//     // Not implementing batch constrained generation for older versions, sorry
+//     // This logic is already too complex
+//     let slow_logits = if audio_only {
+//         constrain_probs_to_audio(&logits, &model.model_type, &model.token_config)?
+//     } else {
+//         logits
+//     };
+
+//     // Unfortunately the candle_nn sampler is single-batch only, so we're doing this manually
+//     //
+//     panic!("Not implemented, will do tomorrow")
+// }
+
+pub struct VQToken {
+    /// Tensor version of tokens
+    pub codes: Tensor,
+    pub tokens: Vec<u32>,
+    pub hidden_state: Tensor,
+}
+
+pub struct SingleBatchGenerator<'a> {
+    model: &'a mut DualARTransformer,
+    logits_processor: LogitsProcessor,
+    rep_pen_processors: Vec<RepPenProcessor>,
+    pub input_pos: usize,
+    max_new_tokens: usize,
+    prompt: Option<Tensor>,
+    previous_codes: Option<Vec<u32>>,
+    audio_only: bool,
+}
+
+impl<'a> SingleBatchGenerator<'a> {
+    pub fn new(
+        model: &'a mut DualARTransformer,
+        prompt: &Tensor,
+        max_new_tokens: usize,
+        sampling_args: &SamplingArgs,
+        audio_only: bool,
+    ) -> Result<Self> {
+        let sampling = match sampling_args.temp {
+            0.0 => Sampling::ArgMax,
+            temp => Sampling::TopKThenTopP {
+                temperature: temp,
+                p: sampling_args.top_p,
+                k: sampling_args.top_k,
+            },
+        };
+        let logits_processor = LogitsProcessor::from_sampling(rand::random::<u64>(), sampling);
+        let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
+            .map(|_| {
+                RepPenProcessor::new(
+                    model.cfg.codebook_size,
+                    16,
+                    sampling_args.repetition_penalty,
+                    model.fast_embeddings.embeddings().dtype(),
+                    model.fast_embeddings.embeddings().device(),
+                )
+            })
+            .collect();
+        let rep_pen_processors = maybe_fast_rep_pens?;
+        let input_pos = model.curr_kv_size()?;
+
+        Ok(Self {
+            max_new_tokens: max_new_tokens + model.curr_kv_size()?,
+            model,
+            prompt: Some(prompt.clone()),
+            logits_processor,
+            rep_pen_processors,
+            input_pos,
+            audio_only,
+            previous_codes: None,
+        })
+    }
+}
+
+impl<'a> Iterator for SingleBatchGenerator<'a> {
+    type Item = Result<VQToken>;
+
+    fn next(&mut self) -> Option<Result<VQToken>> {
+        if self.input_pos > self.max_new_tokens {
+            println!(
+                "Terminating early; input pos: {:?}, max: {:?}",
+                self.input_pos, self.max_new_tokens
+            );
+            return None;
+        }
+
+        // Audio only, <|im_end|> was reached last time
+        if self.prompt.is_none() {
+            return None;
+        }
+
+        let x = self.prompt.as_ref().unwrap().clone();
+        let prompt_length = x.dim(D::Minus1).unwrap();
+        // This is to allow using ? operator for result inside iterator block
+        // Sorry
+        let result = (|| {
+            let x = if x.rank() == 2 {
+                x.unsqueeze(0)?
+            } else {
+                x.clone()
+            };
+            let (logits, hidden_states) = self.model.forward_generate(&x, self.input_pos, None)?;
+
+            let semantic_token = if self.audio_only {
+                match self.model.model_type {
+                    WhichLM::Fish(WhichFishVersion::Fish1_2)
+                    | WhichLM::Fish(WhichFishVersion::Fish1_4) => {
+                        let slow_logits = logits.flatten_all()?;
+                        // Fish 1.2 and 1.4: semantic backbone only samples PAD/<|im_end|>
+                        // Ah the halcyon days where we're not forced to do a giant softmax to double up the first semantic codes
+                        let pad_prob = slow_logits
+                            .i(self.model.token_config.pad_id as usize)?
+                            .to_dtype(DType::F32)?
+                            .to_scalar::<f32>()?;
+                        let eos_prob = slow_logits
+                            .i(self.model.token_config.im_end_id as usize)?
+                            .to_dtype(DType::F32)?
+                            .to_scalar::<f32>()?;
+
+                        legacy_softmax_sample(
+                            pad_prob,
+                            eos_prob,
+                            self.model.token_config.pad_id,
+                            self.model.token_config.im_end_id,
+                        )
+                    }
+                    _ => {
+                        let slow_logits = constrain_probs_to_audio(
+                            &logits,
+                            &self.model.model_type,
+                            &self.model.token_config,
+                        )?
+                        .flatten_all()?;
+
+                        let shifted_token = self.logits_processor.sample(&slow_logits)?;
+                        rescale_semantic_tokens(
+                            vec![shifted_token],
+                            &self.model.model_type,
+                            &self.model.token_config,
+                        )[0]
+                    }
+                }
+            } else {
+                // Unconstrained generation: accept the huge vocab size and just sample
+                self.logits_processor.sample(&logits)?
+            };
+            let mut codebooks = vec![semantic_token];
+            self.model.clear_fast_layer_caches();
+
+            // Generate token
+            let mut x = hidden_states.clone();
+            // TODO: Skip this and short-circuit when we handle generating text only
+            for codebook_idx in 0..self.model.cfg.num_codebooks {
+                let logits = self
+                    .model
+                    .forward_generate_fast(&x, codebook_idx)?
+                    .flatten_all()?;
+
+                let logits_adj = match &self.previous_codes {
+                    None => logits.clone(),
+                    Some(t) => self.rep_pen_processors[codebook_idx]
+                        .apply(&logits, t[codebook_idx + 1] as usize)?,
+                };
+                let a = self.logits_processor.sample(&logits_adj.flatten_all()?)?;
+                let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
+                x = self
+                    .model
+                    .fast_embeddings
+                    .forward(&a_tensor)?
+                    .unsqueeze(0)?;
+                codebooks.push(a);
+            }
+            let codes_tensor = Tensor::from_vec(
+                codebooks.clone(),
+                self.model.cfg.num_codebooks + 1,
+                x.device(),
+            )?
+            .unsqueeze(D::Minus1)?;
+
+            // Internal state bookkeeping
+            if self.previous_codes.is_none() {
+                self.input_pos += prompt_length;
+            } else {
+                self.input_pos += 1;
+            }
+            self.previous_codes = Some(codebooks.clone());
+            self.prompt = if self.audio_only && semantic_token == self.model.token_config.im_end_id
+            {
+                None
+            } else {
+                Some(codes_tensor.clone())
+            };
+
+            Ok(VQToken {
+                tokens: codebooks,
+                codes: codes_tensor,
+                hidden_state: hidden_states,
+            })
+        })();
+
+        Some(result)
+    }
+}
+
 pub fn generate_blocking_with_hidden(
     model: &mut DualARTransformer,
     prompt: &Tensor,
@@ -103,52 +284,31 @@ pub fn generate_blocking_with_hidden(
     sampling_args: &SamplingArgs,
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>)> {
-    let sampling = match sampling_args.temp {
-        0.0 => Sampling::ArgMax,
-        temp => Sampling::TopKThenTopP {
-            temperature: temp,
-            p: sampling_args.top_p,
-            k: sampling_args.top_k,
-        },
-    };
-    let mut fast_logits_processor = LogitsProcessor::from_sampling(rand::random::<u64>(), sampling);
-    let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
-        .map(|_| {
-            RepPenProcessor::new(
-                model.cfg.codebook_size,
-                16,
-                sampling_args.repetition_penalty,
-                model.fast_embeddings.embeddings().dtype(),
-                model.fast_embeddings.embeddings().device(),
-            )
-        })
-        .collect();
-    let mut fast_rep_pens = maybe_fast_rep_pens?;
+    // TODO: Handle text output
+    let audio_only = true;
+    let n_cached = model.curr_kv_size()?;
+
+    let prompt_size = prompt.dim(D::Minus1)?;
+    let mut generator =
+        SingleBatchGenerator::new(model, prompt, max_new_tokens, sampling_args, audio_only)?;
 
     let start_pp = Instant::now();
-    let mut input_pos = model.curr_kv_size()?;
-    let prompt_size = prompt.dim(D::Minus1)?;
-    let (mut previous_token, mut cur_token, hidden_state_first) = decode_one_token_ar(
-        model,
-        &mut fast_logits_processor,
-        prompt,
-        input_pos,
-        None,
-        &mut fast_rep_pens,
-        true,
-    )?;
+    let first_vq_token = generator.next().ok_or(candle_core::Error::Msg(
+        "Prefill mistakenly thought generation ended. Please check max tokens".into(),
+    ))??;
     let dt = start_pp.elapsed();
-    input_pos += prompt.dim(D::Minus1)?;
     println!(
         "{:.2}ms prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
         dt.as_secs_f64() * 1000.0,
-        input_pos,
-        prompt_size,
-        input_pos - prompt_size,
+        generator.input_pos,
+        generator.input_pos - n_cached,
+        n_cached,
         prompt_size as f64 / dt.as_secs_f64()
     );
 
-    let mut previous_tokens = cur_token.clone();
+    // Set up concatenation batch
+    let mut previous_tokens: Vec<Tensor> = vec![first_vq_token.codes];
+    let mut hidden_states: Vec<Tensor> = vec![first_vq_token.hidden_state];
 
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
@@ -158,39 +318,32 @@ pub fn generate_blocking_with_hidden(
             .tick_chars("/|\\- "),
     );
     spinner.enable_steady_tick(Duration::from_millis(100));
-    spinner.set_message("Generating features");
-    let mut hidden_states: Vec<Tensor> = vec![hidden_state_first];
-
     let start_decode = Instant::now();
-    for i in 1..max_new_tokens {
-        let (next_indices, next_token, hidden_state) = decode_one_token_ar(
-            model,
-            &mut fast_logits_processor,
-            &cur_token,
-            input_pos,
-            Some(previous_token),
-            &mut fast_rep_pens,
-            true,
-        )?;
+    for (i, maybe_vq_token) in generator.into_iter().enumerate() {
+        let vq_token = maybe_vq_token?;
+        previous_tokens.push(vq_token.codes);
+
         if collect_hidden_states {
-            hidden_states.push(hidden_state);
+            hidden_states.push(vq_token.hidden_state);
         }
-        previous_tokens = Tensor::cat(&[previous_tokens, next_token.clone()], D::Minus1)?;
+
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
-        if next_indices[0] == model.token_config.im_end_id {
-            break;
-        }
-        input_pos += 1;
-        cur_token = next_token;
-        previous_token = next_indices;
     }
     let dt = start_decode.elapsed();
-    let out_len = previous_tokens.dim(1)? as f64;
+
+    let full_output = Tensor::cat(&previous_tokens, 1)?;
+    let out_tokens = if audio_only {
+        full_output.i((1.., ..))?
+    } else {
+        full_output
+    };
+    let out_len = previous_tokens.len() as f64;
     let hidden_states = match collect_hidden_states {
         true => Tensor::cat(&hidden_states, 0).ok(),
         false => None,
     };
+
     let frame_rate = match model.model_type {
         WhichLM::DualAR => 12.5,
         _ => 21.535,
@@ -203,7 +356,7 @@ pub fn generate_blocking_with_hidden(
         (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
         (out_len / frame_rate) / dt.as_secs_f64()
     );
-    Ok((previous_tokens.i((1.., ..))?, hidden_states))
+    Ok((out_tokens, hidden_states))
 }
 
 pub fn generate_blocking(
