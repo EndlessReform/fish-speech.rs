@@ -2,9 +2,9 @@ use anyhow::Error;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
+use fish_speech_core::models::text2semantic::generate::generate_blocking;
 use fish_speech_core::models::text2semantic::utils::{
     encode::PromptEncoder,
-    generate::generate_blocking,
     sample::{load_prompt_text, SamplingArgs},
 };
 use fish_speech_core::models::text2semantic::{BaseModelArgs, DualARTransformer, TokenConfig};

@@ -6,9 +6,10 @@ use axum::{body::Body, extract::State, http::StatusCode, response::Response, Jso
 use bytes::Bytes;
 use candle_core::{Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
-use fish_speech_core::models::text2semantic::utils::encode::EncodedChunks;
+use fish_speech_core::models::text2semantic::generate::generate_blocking_with_hidden;
 use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks, generate::generate_blocking_with_hidden, sample::SamplingArgs,
+    encode::{encode_chunks, EncodedChunks},
+    sample::SamplingArgs,
     text::preprocess_text,
 };
 use fish_speech_core::models::vqgan::config::{WhichFishVersion, WhichLM};

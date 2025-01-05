@@ -1,89 +1,15 @@
-use super::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
+use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
+use crate::models::text2semantic::utils::sample::{
+    legacy_softmax_sample, RepPenProcessor, SamplingArgs,
+};
 use crate::models::{
-    text2semantic::{DualARTransformer, TokenConfig},
+    text2semantic::DualARTransformer,
     vqgan::config::{WhichFishVersion, WhichLM},
 };
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
-
-/// Constrains Fish 1.5+ models to <|im_end|> plus <|semantic:n|> range, leaves others untouched
-fn constrain_probs_to_audio(
-    x: &Tensor,
-    model_type: &WhichLM,
-    token_config: &TokenConfig,
-) -> Result<Tensor> {
-    match model_type {
-        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
-            if token_config.im_end_id == token_config.semantic_start_id - 1 {
-                // Fish 1.5: <|im_end|> is right before the semantic range, saving us an indexop and a cat
-                x.i((.., .., token_config.im_end_id as usize..))?
-                    .contiguous()
-            } else {
-                // Generic DualAR model using Fish 1.5 speaker line
-                // TODO: will still break for inner monologue-style speaker lines
-                let im_end_prob = x
-                    .i((.., .., token_config.im_end_id as usize))?
-                    .contiguous()?
-                    .unsqueeze(0)?;
-                // Inefficient but functional if control tokens AFTER semantic range
-                let semantic_token_range = x
-                    .i((.., .., token_config.semantic_start_id as usize..))?
-                    .contiguous()?;
-                Tensor::cat(&[im_end_prob, semantic_token_range], D::Minus1)
-            }
-        }
-        _ => Ok(x.clone()),
-    }
-}
-
-/// Put back tokens after constrained generation sampling
-fn rescale_semantic_tokens(
-    tokens: Vec<u32>,
-    model_type: &WhichLM,
-    token_config: &TokenConfig,
-) -> Vec<u32> {
-    match model_type {
-        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => tokens
-            .iter()
-            .map(|token| {
-                if token_config.im_end_id == token_config.semantic_start_id - 1 {
-                    token + token_config.im_end_id
-                } else if *token == 0 {
-                    token_config.im_end_id
-                } else {
-                    token - 1 + token_config.semantic_start_id
-                }
-            })
-            .collect(),
-        _ => tokens,
-    }
-}
-
-// fn prefill_batch(
-//     model: &mut DualARTransformer,
-//     x: &Tensor,
-//     sampling: &Sampling,
-//     key_padding_mask: Option<Tensor>,
-//     audio_only: bool,
-//     rep_pens: &mut [RepPenProcessor],
-// ) -> Result<(Vec<Vec<u32>>, Tensor)> {
-//     model.clear_slow_layer_caches();
-//     let (logits, hidden_states) = model.forward_generate(x, 0, key_padding_mask)?;
-
-//     // Not implementing batch constrained generation for older versions, sorry
-//     // This logic is already too complex
-//     let slow_logits = if audio_only {
-//         constrain_probs_to_audio(&logits, &model.model_type, &model.token_config)?
-//     } else {
-//         logits
-//     };
-
-//     // Unfortunately the candle_nn sampler is single-batch only, so we're doing this manually
-//     //
-//     panic!("Not implemented, will do tomorrow")
-// }
 
 pub struct VQToken {
     /// Tensor version of tokens
@@ -120,7 +46,7 @@ impl<'a> SingleBatchGenerator<'a> {
             },
         };
         let logits_processor = LogitsProcessor::from_sampling(rand::random::<u64>(), sampling);
-        let maybe_fast_rep_pens: Result<Vec<RepPenProcessor>> = (0..model.cfg.num_codebooks)
+        let rep_pen_processors: Vec<RepPenProcessor> = (0..model.cfg.num_codebooks)
             .map(|_| {
                 RepPenProcessor::new(
                     model.cfg.codebook_size,
@@ -130,8 +56,7 @@ impl<'a> SingleBatchGenerator<'a> {
                     model.fast_embeddings.embeddings().device(),
                 )
             })
-            .collect();
-        let rep_pen_processors = maybe_fast_rep_pens?;
+            .collect::<Result<_>>()?;
         let input_pos = model.curr_kv_size()?;
 
         Ok(Self {
