@@ -9,13 +9,10 @@ use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::{
     audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
+    config::{WhichCodec, WhichFishVersion, WhichLM, WhichModel},
     models::{
-        lm::{BaseModelArgs, DualARTransformer, TokenConfig},
-        vqgan::{
-            config::{FireflyConfig, WhichCodec, WhichFishVersion, WhichLM, WhichModel},
-            decoder::FireflyDecoder,
-            encoder::FireflyEncoder,
-        },
+        lm::{dual_ar::BaseModelArgs, dual_ar::TokenConfig, DualARTransformer},
+        vqgan::{config::FireflyConfig, decoder::FireflyDecoder, encoder::FireflyEncoder},
     },
 };
 pub use futures_util::Stream;

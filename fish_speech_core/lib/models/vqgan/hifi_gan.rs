@@ -1,5 +1,6 @@
-use super::config::{HiFiGANConfig, WhichFishVersion};
+use super::config::HiFiGANConfig;
 use super::utils::{FishConvNet, FishTransConvNet};
+use crate::config::WhichFishVersion;
 use candle_core::{Result, Tensor};
 use candle_nn::{Conv1dConfig, ConvTranspose1dConfig, Module, VarBuilder};
 

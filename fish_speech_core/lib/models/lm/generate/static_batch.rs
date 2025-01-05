@@ -1,5 +1,6 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
-use crate::models::{lm::DualARTransformer, vqgan::config::WhichLM};
+use crate::config::WhichLM;
+use crate::models::lm::DualARTransformer;
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};

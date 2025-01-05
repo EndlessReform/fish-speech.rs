@@ -1,7 +1,8 @@
-use super::config::{DownsampleFSQConfig, WhichFishVersion};
+use super::config::DownsampleFSQConfig;
 use super::convnext::{ConvNeXtBlock, ConvNeXtBlockConfig};
 use super::grouped_residual_fsq::{GroupedResidualFSQ, GroupedResidualFSQConfig};
 use super::utils::{FishConvNet, FishTransConvNet};
+use crate::config::WhichFishVersion;
 use candle_core::{Result, Tensor};
 use candle_nn::{Conv1dConfig, ConvTranspose1dConfig, Module, VarBuilder};
 

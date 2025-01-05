@@ -1,7 +1,5 @@
-use crate::models::{
-    lm::TokenConfig,
-    vqgan::config::{WhichFishVersion, WhichLM},
-};
+use crate::config::{WhichFishVersion, WhichLM};
+use crate::models::lm::dual_ar::TokenConfig;
 use candle_core::{IndexOp, Result, Tensor, D};
 
 /// Constrains Fish 1.5+ models to <|im_end|> plus <|semantic:n|> range, leaves others untouched

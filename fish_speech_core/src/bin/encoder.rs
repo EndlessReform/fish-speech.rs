@@ -4,10 +4,8 @@ use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
-use fish_speech_core::models::vqgan::config::{
-    FireflyConfig, WhichCodec, WhichFishVersion, WhichModel,
-};
-use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
+use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
+use fish_speech_core::models::vqgan::{config::FireflyConfig, encoder::FireflyEncoder};
 use std::path::PathBuf;
 use std::time::Instant;
 

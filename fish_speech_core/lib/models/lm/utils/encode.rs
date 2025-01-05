@@ -1,5 +1,5 @@
 use super::text::TextChunk;
-use crate::models::vqgan::config::{WhichFishVersion, WhichLM};
+use crate::config::{WhichFishVersion, WhichLM};
 use candle_core::{DType, Device, Error, IndexOp, Result, Tensor};
 use tokenizers::Tokenizer;
 

@@ -1,6 +1,7 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
-use super::{config::WhichFishVersion, utils::FishConvNet};
+use super::utils::FishConvNet;
+use crate::config::WhichFishVersion;
 use candle_core::{Error, Result, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
