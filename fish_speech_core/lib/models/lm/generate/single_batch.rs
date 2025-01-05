@@ -1,9 +1,7 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
-use crate::models::text2semantic::utils::sample::{
-    legacy_softmax_sample, RepPenProcessor, SamplingArgs,
-};
+use crate::models::lm::utils::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
 use crate::models::{
-    text2semantic::DualARTransformer,
+    lm::DualARTransformer,
     vqgan::config::{WhichFishVersion, WhichLM},
 };
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};

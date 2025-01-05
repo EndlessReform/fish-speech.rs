@@ -1,7 +1,7 @@
 use super::audio::codec::Codec;
 use candle_core::{Device, Tensor};
-use fish_speech_core::models::text2semantic::BaseModelArgs;
-use fish_speech_core::models::text2semantic::DualARTransformer;
+use fish_speech_core::models::lm::BaseModelArgs;
+use fish_speech_core::models::lm::DualARTransformer;
 use fish_speech_core::models::vqgan::config::{WhichLM, WhichModel};
 use std::collections::HashMap;
 use std::sync::Arc;

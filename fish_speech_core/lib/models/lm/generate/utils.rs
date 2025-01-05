@@ -1,5 +1,5 @@
 use crate::models::{
-    text2semantic::TokenConfig,
+    lm::TokenConfig,
     vqgan::config::{WhichFishVersion, WhichLM},
 };
 use candle_core::{IndexOp, Result, Tensor, D};

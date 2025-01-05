@@ -5,7 +5,7 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
-use fish_speech_core::models::text2semantic::utils::{
+use fish_speech_core::models::lm::utils::{
     encode::encode_chunks, sample::SamplingArgs, text::preprocess_text,
 };
 use serde::Deserialize;

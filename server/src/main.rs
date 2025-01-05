@@ -10,7 +10,7 @@ use clap::Parser;
 use fish_speech_core::{
     audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
     models::{
-        text2semantic::{BaseModelArgs, DualARTransformer, TokenConfig},
+        lm::{BaseModelArgs, DualARTransformer, TokenConfig},
         vqgan::{
             config::{FireflyConfig, WhichCodec, WhichFishVersion, WhichLM, WhichModel},
             decoder::FireflyDecoder,
