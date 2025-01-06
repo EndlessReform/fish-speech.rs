@@ -203,7 +203,10 @@ impl<'a> Iterator for BatchGenerator<'a> {
             for (codebook_idx, rep_pen) in
                 (0..self.model.cfg.num_codebooks).zip(self.rep_pen_processors.iter_mut())
             {
-                let fast_logits = self.model.forward_generate_fast(&x, codebook_idx)?;
+                let fast_logits = self
+                    .model
+                    .forward_generate_fast(&x, codebook_idx)?
+                    .to_dtype(candle_core::DType::F32)?;
                 let fast_logits = rep_pen.apply_mask(&fast_logits)?;
 
                 // TODO: put sampling here too
@@ -343,8 +346,8 @@ pub fn generate_static_batch(
     let dt = start_decode.elapsed();
     // this is fine since we ruled out bs=0 earlier
     // TODO Completely arbitrary unprincipled decision for debugging, remove this as soon as humanly possible
-    sequences.drain(0..1);
-    println!("Your sequence is getting invisibly truncated, remove this!");
+    // sequences.drain(0..1);
+    // println!("Your sequence is getting invisibly truncated, remove this!");
     let out_len = sequences[0].is_audio_steps.len() as f64;
     if out_len == 1.0 && audio_only {
         candle_core::bail!(
