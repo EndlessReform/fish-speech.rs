@@ -20,7 +20,7 @@ pub fn constrain_probs_to_audio(
                 let im_end_prob = x
                     .i((.., .., token_config.im_end_id as usize))?
                     .contiguous()?
-                    .unsqueeze(0)?;
+                    .unsqueeze(1)?;
                 // Inefficient but functional if control tokens AFTER semantic range
                 let semantic_token_range = x
                     .i((.., .., token_config.semantic_start_id as usize..))?

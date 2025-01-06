@@ -17,6 +17,7 @@ pub struct LMState {
     pub default_voice: Arc<Tensor>,
     pub default_temp: f64,
     pub default_top_p: f64,
+    pub max_new_tokens: usize,
 }
 
 pub struct AppState {

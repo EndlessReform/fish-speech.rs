@@ -108,6 +108,8 @@ fn load_lm(
         default_voice: Arc::new(default_speaker),
         default_temp: args.temp,
         default_top_p: args.top_p,
+        // TODO Totally arbitrary value, make this configurable from CLI
+        max_new_tokens: 1024,
     })
 }
 

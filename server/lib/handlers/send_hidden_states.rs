@@ -43,6 +43,7 @@ pub async fn generate_hidden_states(
         Some(voice_embedding),
         num_codebooks,
         state.lm.model_type,
+        true,
     )?;
 
     let mut all_hidden_states = Vec::new();
@@ -57,14 +58,14 @@ pub async fn generate_hidden_states(
     };
     for prompt in prompts.chunks.iter() {
         let (semantic_tokens, maybe_hidden) = server_lm_generate_blocking(
-            &state,
+            state.clone(),
             prompt,
             &sampling_args,
             prompts.n_conditioning_tokens,
             true,
         )
         .await?;
-        let pcm = vocode_semantic_tokens(&state, &semantic_tokens).await?;
+        let pcm = vocode_semantic_tokens(state.clone(), &semantic_tokens).await?;
         if let Some(hidden) = maybe_hidden {
             // println!("{:?} maybe?", hidden.squeeze(1)?.shape());
             all_hidden_states.push(hidden.squeeze(1)?);

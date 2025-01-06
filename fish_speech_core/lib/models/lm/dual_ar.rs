@@ -256,11 +256,17 @@ impl Attention {
         // Masking w/ KV cache is redundant
         let attn_weight = match attn_mask {
             None => attn_weight,
-            Some(attn_mask) => masked_fill(
-                &attn_weight,
-                &attn_mask.broadcast_left((1, self.n_head))?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(attn_mask) => {
+                let repeated_mask = match attn_mask.rank() {
+                    2 => attn_mask.broadcast_left((1, self.n_head))?,
+                    4 => {
+                        let (bsz, _, x, y) = attn_mask.dims4()?;
+                        attn_mask.expand((bsz, self.n_head, x, y))?
+                    }
+                    n => candle_core::bail!("Expected mask rank 2 or 4 but got {}", n),
+                };
+                masked_fill(&attn_weight, &repeated_mask, f32::NEG_INFINITY)?
+            }
         };
         let attn_weight = softmax_last_dim(&attn_weight)?;
         // Ignoring dropout until we implement training
@@ -540,7 +546,8 @@ impl DualARTransformer {
         }?
         .unsqueeze(D::Minus1)?
         .to_dtype(codebook_emb.dtype())?;
-        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
+        // (bsz, codes, seqlen, emb_dim) * (bsz, codes, seqlen, mask)
+        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask.unsqueeze(D::Minus(3))?)?;
         let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 1)?;
         // Sum on code dimension
         x.sum(1)
@@ -557,24 +564,37 @@ impl DualARTransformer {
         input_pos: usize,
         pad_mask: Option<Tensor>,
     ) -> Result<(Tensor, Tensor)> {
+        // println!("{:?}", inp.to_device(&Device::Cpu)?.to_vec3::<u32>());
         let mut x = self.embed(inp)?;
+        // println!("Embedded");
         let (bsz, seq_len, _) = x.dims3()?;
 
         let mask = match seq_len {
             1 => self.get_mask_abs(1, 1, x.device())?,
             _ => self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
         };
+        // println!("Mask shape: {:?}", mask.shape());
+        // println!("{:?}", inp.to_device(&Device::Cpu)?.to_vec3::<u32>());
         let mask = match pad_mask {
             Some(key_padding_mask) => {
                 // Unlike in Torch, 0 is keep, 1 is MASK.
                 // We GET 0: mask 1: keep, so flip it
                 // Yes, this is terrible. Candle.rs has no booleans so this is what we got
+                // println!(
+                //     "Inverted padding mask: {:?}",
+                //     key_padding_mask.to_device(&Device::Cpu)?.to_vec2::<u8>()?
+                // );
                 let inverted_padding =
                     Tensor::ones_like(&key_padding_mask)?.sub(&key_padding_mask)?;
+
+                // println!(
+                //     "Inverted padding mask: {:?}",
+                //     inverted_padding.to_device(&Device::Cpu)?.to_vec2::<u8>()?
+                // );
                 let mask = mask.reshape((1, 1, seq_len, seq_len))?;
                 // Logical AND
                 // 0, 0 (keep, keep) -> keep, otherwise 1 (mask)
-                mask.maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
+                mask.broadcast_maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
             }
             None => mask,
         };
@@ -590,10 +610,12 @@ impl DualARTransformer {
                 ),
             )?;
         }
+        // println!("Done, proceeding to narrow");
 
         let x = x.narrow(1, seq_len - 1, 1)?;
         let slow_out = self.norm.forward(&x)?;
         let token_logits = self.output.forward(&slow_out)?;
+        // println!("Token logits shape: {:?}", token_logits.shape());
 
         // Only calculate the logits of last_token
         Ok((token_logits, x))

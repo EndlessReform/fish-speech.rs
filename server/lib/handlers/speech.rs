@@ -7,7 +7,9 @@ use bytes::Bytes;
 use candle_core::{Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::config::{WhichFishVersion, WhichLM};
-use fish_speech_core::models::lm::generate::generate_blocking_with_hidden;
+use fish_speech_core::models::lm::generate::{
+    generate_blocking_with_hidden, generate_static_batch,
+};
 use fish_speech_core::models::lm::utils::{
     encode::{encode_chunks, EncodedChunks},
     sample::SamplingArgs,
@@ -20,20 +22,17 @@ use tokio::sync::Mutex;
 
 // Blocking token generation
 pub async fn server_lm_generate_blocking(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     encoded_input: &Tensor,
     sampling_args: &SamplingArgs,
     n_conditioning_tokens: usize,
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>), anyhow::Error> {
-    // Arbitrary number
-    let max_tokens: usize = 2048;
-
     let mut model = state.lm.model.lock().await;
     let (tokens, hidden_states) = generate_blocking_with_hidden(
         &mut model,
         &encoded_input,
-        max_tokens,
+        state.lm.max_new_tokens,
         sampling_args,
         collect_hidden_states,
     )
@@ -43,17 +42,17 @@ pub async fn server_lm_generate_blocking(
     let mut hidden_states = hidden_states;
     // It's the caller's responsibility to do final clear
     model.clear_slow_caches_until(n_conditioning_tokens)?;
-    if tokens.dim(D::Minus1)? == max_tokens {
+    if tokens.dim(D::Minus1)? == state.lm.max_new_tokens {
         println!("Failed generation suspected. Rerolling once");
         let (new_tokens, new_hidden_states) = generate_blocking_with_hidden(
             &mut model,
             &encoded_input,
-            1024,
+            state.lm.max_new_tokens,
             sampling_args,
             collect_hidden_states,
         )
         .context("Failed to generate tokens")?;
-        if new_tokens.dim(D::Minus1)? != max_tokens {
+        if new_tokens.dim(D::Minus1)? != state.lm.max_new_tokens {
             tokens = new_tokens;
             hidden_states = new_hidden_states;
         } else {
@@ -74,8 +73,24 @@ pub async fn server_lm_generate_blocking(
     Ok((tokens, hidden_states))
 }
 
+pub async fn generate_pcm_batched(
+    state: Arc<AppState>,
+    encoded_input: &[Tensor],
+) -> anyhow::Result<Tensor> {
+    let mut model = state.lm.model.lock().await;
+
+    // No sampling configurable for now
+    let (sequences, _) =
+        generate_static_batch(&mut model, encoded_input, state.lm.max_new_tokens, true)?;
+
+    model.clear_slow_layer_caches();
+    // By invariant, batch items are returned in order
+    let semantic_tokens = Tensor::cat(&sequences, D::Minus1)?;
+    vocode_semantic_tokens(state.clone(), &semantic_tokens).await
+}
+
 pub async fn vocode_semantic_tokens(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     semantic_tokens: &Tensor,
 ) -> anyhow::Result<Tensor> {
     let vocoder_start = Instant::now();
@@ -89,7 +104,7 @@ pub async fn vocode_semantic_tokens(
 }
 
 async fn generate_pcm_chunk(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     encoded_input: &Tensor,
     n_conditioning_tokens: usize,
 ) -> anyhow::Result<Tensor> {
@@ -97,11 +112,12 @@ async fn generate_pcm_chunk(
         temp: state.lm.default_temp,
         top_p: state.lm.default_top_p,
         top_k: 256,
+        // TODO: make this default!
         repetition_penalty: 1.3,
     };
 
     let (semantic_tokens, _) = server_lm_generate_blocking(
-        state,
+        state.clone(),
         encoded_input,
         &sampling_args,
         n_conditioning_tokens,
@@ -109,7 +125,7 @@ async fn generate_pcm_chunk(
     )
     .await
     .context("Failed to generate semantic tokens")?;
-    vocode_semantic_tokens(state, &semantic_tokens).await
+    vocode_semantic_tokens(state.clone(), &semantic_tokens).await
 }
 
 async fn generate_speech_blocking(
@@ -119,9 +135,19 @@ async fn generate_speech_blocking(
     let mut all_pcm = Vec::new();
 
     // Initial prefill
-    for (i, prompt) in prompts.chunks.iter().enumerate() {
-        println!("Beginning chunk {} of {}", i, prompts.chunks.len());
-        let pcm = generate_pcm_chunk(&state, prompt, prompts.n_conditioning_tokens)
+    // for (i, prompt) in prompts.chunks.iter().enumerate() {
+    //     println!("Beginning chunk {} of {}", i, prompts.chunks.len());
+    //     let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
+    //         .await?
+    //         .to_vec1::<f32>()?;
+    //     all_pcm.extend(pcm);
+    // }
+    //
+    // TODO this is complete vandalism! DO NOT FUCKING MERGE THIS PUT IT BACK YOU FOOL
+    const BSZ: usize = 8;
+    for (i, batch) in prompts.chunks.chunks(BSZ).enumerate() {
+        println!("Processing batch {} ({}) prompts", i, batch.len());
+        let pcm = generate_pcm_batched(state.clone(), batch)
             .await?
             .to_vec1::<f32>()?;
         all_pcm.extend(pcm);
@@ -161,7 +187,7 @@ async fn generate_speech_streaming(
     let stream = async_stream::stream! {
         for (i, prompt) in prompts.chunks.iter().enumerate() {
             println!("Generating chunk {} of {}", i, prompts.chunks.len());
-            match generate_pcm_chunk(&stream_state, prompt, prompts.n_conditioning_tokens).await {
+            match generate_pcm_chunk(stream_state.clone(), prompt, prompts.n_conditioning_tokens).await {
                 Ok(pcm_data) => {
                     if i == prompts.chunks.len() - 1 {
                         let mut model = stream_state.lm.model.lock().await;
@@ -205,6 +231,7 @@ pub struct GenerateRequest {
     model: String, // Ignored for now
     voice: String,
     input: String,
+    /// Default: WAV
     response_format: Option<String>,
 }
 
@@ -212,6 +239,7 @@ pub struct GenerateRequest {
 pub struct GenerateResponse {
     audio: Vec<f32>,
 }
+
 pub async fn generate_speech(
     State(state): State<Arc<AppState>>,
     Json(request): Json<GenerateRequest>,
@@ -240,6 +268,8 @@ pub async fn generate_speech(
         voice_embedding,
         num_codebooks,
         state.lm.model_type,
+        // TODO DO NOT MERGE, THIS IS A HACK
+        false,
     )?;
 
     if request.response_format == Some("opus".into()) {

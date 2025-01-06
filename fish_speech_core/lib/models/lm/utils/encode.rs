@@ -116,6 +116,7 @@ pub fn encode_chunks(
     cached_speaker: Option<Tensor>,
     num_codebooks: usize,
     model_type: WhichLM,
+    assume_kv_cache: bool,
 ) -> Result<EncodedChunks> {
     let mut encoded_chunks = Vec::new();
 
@@ -138,7 +139,7 @@ pub fn encode_chunks(
 
         let encoded = if let Some(conditioning_tokens) = cached_speaker.as_ref() {
             // Assume the preprocessing code from earlier worked fine
-            if i == 0 {
+            if i == 0 || !assume_kv_cache {
                 Tensor::cat(
                     &[
                         system_prompt.clone(),

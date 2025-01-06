@@ -94,7 +94,7 @@ impl<'a> BatchGenerator<'a> {
                 &[pad_tensor.i((.., ..(max_prefill_length - l)))?, p.clone()],
                 1,
             )?);
-            pad_masks.push(range.gt((max_prefill_length - l) as u32)?);
+            pad_masks.push(range.ge((max_prefill_length - l) as u32)?);
         }
         Ok((
             Tensor::stack(&padded_prompts, 0)?,
@@ -117,6 +117,8 @@ impl<'a> Iterator for BatchGenerator<'a> {
         }
         let prompt = self.prompt.as_ref().unwrap().clone();
         let result = (|| {
+            // println!("Trying generating at pos {}", self.input_pos);
+            // println!("Prompt size: {:?}", prompt.shape());
             let (slow_logits, hidden_states) =
                 self.model
                     .forward_generate(&prompt, self.input_pos, self.pad_mask.clone())?;
@@ -135,7 +137,10 @@ impl<'a> Iterator for BatchGenerator<'a> {
             let raw_slow_ids = slow_logits
                 .argmax(D::Minus1)?
                 .to_device(&Device::Cpu)?
+                .flatten_all()?
                 .to_vec1::<u32>()?;
+            let raw_slow_ids = raw_slow_ids;
+
             let slow_ids = if self.audio_only {
                 rescale_semantic_tokens(
                     raw_slow_ids,
@@ -187,13 +192,15 @@ impl<'a> Iterator for BatchGenerator<'a> {
                 let ids = fast_logits
                     .argmax(D::Minus1)?
                     .to_device(&Device::Cpu)?
+                    .flatten_all()?
                     .to_vec1::<u32>()?;
                 // Prime hidden state WTE for next round
-                x = self.model.fast_embeddings.forward(&Tensor::from_slice(
-                    &ids,
-                    ids.len(),
-                    x.device(),
-                )?)?;
+                // Unsqueeze seqlen, yeah it's always (bsz, seqlen=1, hidden_dim) but downstream doesn't know that
+                x = self
+                    .model
+                    .fast_embeddings
+                    .forward(&Tensor::from_slice(&ids, ids.len(), x.device())?)?
+                    .unsqueeze(1)?;
                 for (idx_in_batch, id) in ids.iter().enumerate() {
                     codebook_ids[idx_in_batch].push(*id);
                 }
@@ -218,7 +225,7 @@ impl<'a> Iterator for BatchGenerator<'a> {
 
                     Ok((
                         BatchPosition {
-                            codes: codes_tensor.clone(),
+                            codes: codes_tensor.clone().unsqueeze(1)?,
                             is_audio,
                             is_active: !is_dead,
                         },
@@ -234,7 +241,8 @@ impl<'a> Iterator for BatchGenerator<'a> {
                 // All prompts are dead, end generation
                 None
             } else {
-                Some(Tensor::stack(&next_prompt_codes, 0)?)
+                // Similar to above, seqlen always is 1 but we need to insert spurious dim anyway hereafter
+                Some(Tensor::stack(&next_prompt_codes, 0)?.unsqueeze(D::Minus1)?)
             };
             if self.input_pos == 0 {
                 // Prefill
@@ -268,6 +276,7 @@ pub fn generate_static_batch(
     let first_position: Vec<BatchPosition> = generator.next().ok_or(candle_core::Error::Msg(
         "Prefill mistakenly thought generation ended. Please check max tokens".into(),
     ))??;
+    println!("First position: {:?}", first_position);
     let dt = start_pp.elapsed();
     println!(
         "{:.2}ms prompt processing: {} seqlen at bs={} ({:.2} tokens/s)",
@@ -296,24 +305,37 @@ pub fn generate_static_batch(
     let start_decode = Instant::now();
     for (i, maybe_batch_pos) in generator.into_iter().enumerate() {
         let vq_token = maybe_batch_pos?;
-        for (seq, pos) in sequences.iter_mut().zip(vq_token.into_iter()) {
+        for (j, (seq, pos)) in sequences.iter_mut().zip(vq_token.into_iter()).enumerate() {
             if !(audio_only && !pos.is_active) {
                 seq.tokens.push(pos.codes);
                 seq.is_audio_steps.push(pos.is_audio);
+                println!("Pushing for {}", j);
+            } else {
+                println!("Pos in batch {} inactive; doing nothing", j);
             }
         }
 
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
     }
+    println!("Generation done");
     let dt = start_decode.elapsed();
     // this is fine since we ruled out bs=0 earlier
+    // TODO Completely arbitrary unprincipled decision for debugging, remove this as soon as humanly possible
+    sequences.drain(0..1);
+    println!("Your sequence is getting invisibly truncated, remove this!");
     let out_len = sequences[0].is_audio_steps.len() as f64;
+    if out_len == 1.0 && audio_only {
+        candle_core::bail!(
+            "No audio generated; model immediately picked <|im_end|> for all steps. Please check your masks"
+        )
+    }
 
     let (output_seqs, is_audio): (Vec<_>, Vec<_>) = sequences
         .into_iter()
         .map(|seq| {
             let tokens = Tensor::cat(&seq.tokens, D::Minus1)?;
+            println!("Shape: {:?}", tokens.shape());
             Ok((tokens, seq.is_audio_steps))
         })
         .collect::<Result<Vec<_>>>()?
