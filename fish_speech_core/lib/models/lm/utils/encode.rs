@@ -1,6 +1,7 @@
 use super::text::TextChunk;
 use crate::config::{WhichFishVersion, WhichLM};
 use candle_core::{DType, Device, Error, IndexOp, Result, Tensor};
+use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 pub struct PromptEncoder<'a> {
@@ -168,4 +169,52 @@ pub fn encode_chunks(
         // This is fine, by invariant it will complete
         chunks: encoded_chunks,
     })
+}
+
+pub fn load_prompt_text(
+    prompt_path: &PathBuf,
+    device: &Device,
+    num_codebooks: usize,
+) -> Result<Tensor> {
+    let prompt_tokens = Tensor::read_npy(prompt_path)?.to_dtype(DType::U32)?;
+    let prompt_tokens = prompt_tokens.to_dtype(DType::U32)?.to_device(device)?;
+    match (prompt_tokens.rank(), prompt_tokens.dim(0)) {
+        (2, Ok(n_actual_codebooks)) => {
+            // Fine
+            if n_actual_codebooks == num_codebooks {
+                return Ok(prompt_tokens);
+            } else {
+                candle_core::bail!(
+                    "Expected {} codebooks but got {}",
+                    num_codebooks,
+                    n_actual_codebooks
+                )
+            }
+        }
+        (3, Ok(1)) => {
+            // Ghost third dimension OK
+            if prompt_tokens.dim(1)? == num_codebooks {
+                prompt_tokens.squeeze(0)
+            } else {
+                candle_core::bail!(
+                    "Expected {} codebooks but got {}",
+                    num_codebooks,
+                    prompt_tokens.dim(1)?
+                )
+            }
+        }
+        (d, _) => {
+            candle_core::bail!(
+                "Incorrect prompt token dimensions for {:?}: {d}",
+                prompt_path
+            )
+        }
+    }
+}
+
+pub struct SamplingArgs {
+    pub temp: f64,
+    pub top_p: f64,
+    pub top_k: usize,
+    pub repetition_penalty: f32,
 }

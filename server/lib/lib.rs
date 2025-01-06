@@ -4,8 +4,7 @@ pub mod state;
 
 use candle_core::{Device, Tensor};
 use fish_speech_core::config::WhichLM;
-use fish_speech_core::models::lm::utils::encode::PromptEncoder;
-use fish_speech_core::models::lm::utils::sample::load_prompt_text;
+use fish_speech_core::models::lm::utils::encode::{load_prompt_text, PromptEncoder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;

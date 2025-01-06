@@ -1,5 +1,6 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
 use crate::config::WhichLM;
+use crate::models::lm::sampling::{rep_pen::BatchedRepPenProcessor, SamplingArgs};
 use crate::models::lm::DualARTransformer;
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -22,6 +23,8 @@ pub struct BatchGenerator<'a> {
     audio_only: bool,
     batch_item_is_dead: Vec<bool>,
     bsz: usize,
+    rep_pen_processors: Vec<BatchedRepPenProcessor>,
+    sampling_args: SamplingArgs,
 }
 
 impl<'a> BatchGenerator<'a> {
@@ -31,13 +34,23 @@ impl<'a> BatchGenerator<'a> {
         prompts: &[Tensor],
         max_new_tokens: usize,
         audio_only: bool,
+        sampling_args: SamplingArgs,
     ) -> Result<Self> {
         let (prompt, pad_mask) = BatchGenerator::pad_prompts(prompts, model, max_new_tokens)?;
+        let bsz = prompts.len();
 
-        // Deliberately not implementing any sampling stuff for now
-        // will just argmax to prove correctness before proceeding
-        // Yes, this sucks
         Ok(Self {
+            // TODO remove arbitrary constant
+            rep_pen_processors: (0..model.cfg.num_codebooks)
+                .map(|_| {
+                    BatchedRepPenProcessor::new(
+                        model.cfg.codebook_size,
+                        12,
+                        sampling_args.repetition_penalty,
+                        bsz,
+                    )
+                })
+                .collect(),
             model,
             prompt: Some(prompt),
             pad_mask: Some(pad_mask),
@@ -47,6 +60,7 @@ impl<'a> BatchGenerator<'a> {
             audio_only,
             batch_item_is_dead: vec![false; prompts.len()],
             bsz: prompts.len(),
+            sampling_args,
         })
     }
 
@@ -186,8 +200,12 @@ impl<'a> Iterator for BatchGenerator<'a> {
                 })
                 .collect();
 
-            for codebook_idx in 0..self.model.cfg.num_codebooks {
+            for (codebook_idx, rep_pen) in
+                (0..self.model.cfg.num_codebooks).zip(self.rep_pen_processors.iter_mut())
+            {
                 let fast_logits = self.model.forward_generate_fast(&x, codebook_idx)?;
+                let fast_logits = rep_pen.apply_mask(&fast_logits)?;
+
                 // TODO: put sampling here too
                 let ids = fast_logits
                     .argmax(D::Minus1)?
@@ -196,6 +214,7 @@ impl<'a> Iterator for BatchGenerator<'a> {
                     .to_vec1::<u32>()?;
                 // Prime hidden state WTE for next round
                 // Unsqueeze seqlen, yeah it's always (bsz, seqlen=1, hidden_dim) but downstream doesn't know that
+                rep_pen.update_mask(ids.clone())?;
                 x = self
                     .model
                     .fast_embeddings
@@ -269,8 +288,10 @@ pub fn generate_static_batch(
     prompts: &[Tensor],
     max_new_tokens: usize,
     audio_only: bool,
+    sampling_args: SamplingArgs,
 ) -> Result<(Vec<Tensor>, Vec<Vec<bool>>)> {
-    let mut generator = BatchGenerator::new(model, prompts, max_new_tokens, audio_only)?;
+    let mut generator =
+        BatchGenerator::new(model, prompts, max_new_tokens, audio_only, sampling_args)?;
 
     let start_pp = Instant::now();
     let first_position: Vec<BatchPosition> = generator.next().ok_or(candle_core::Error::Msg(

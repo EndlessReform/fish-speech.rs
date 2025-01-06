@@ -5,9 +5,8 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
-use fish_speech_core::models::lm::utils::{
-    encode::encode_chunks, sample::SamplingArgs, text::preprocess_text,
-};
+use fish_speech_core::models::lm::sampling::SamplingArgs;
+use fish_speech_core::models::lm::utils::{encode::encode_chunks, text::preprocess_text};
 use serde::Deserialize;
 use std::io::{Cursor, Write};
 use std::sync::Arc;

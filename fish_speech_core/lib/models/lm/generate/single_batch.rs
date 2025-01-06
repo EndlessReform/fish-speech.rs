@@ -1,6 +1,8 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
 use crate::config::{WhichFishVersion, WhichLM};
-use crate::models::lm::utils::sample::{legacy_softmax_sample, RepPenProcessor, SamplingArgs};
+use crate::models::lm::sampling::{
+    legacy_softmax_sample, rep_pen::SingleBatchedRepPenProcessor, SamplingArgs,
+};
 use crate::models::lm::DualARTransformer;
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -17,7 +19,7 @@ pub struct VQToken {
 pub struct SingleBatchGenerator<'a> {
     model: &'a mut DualARTransformer,
     logits_processor: LogitsProcessor,
-    rep_pen_processors: Vec<RepPenProcessor>,
+    rep_pen_processors: Vec<SingleBatchedRepPenProcessor>,
     pub input_pos: usize,
     max_new_tokens: usize,
     prompt: Option<Tensor>,
@@ -42,9 +44,9 @@ impl<'a> SingleBatchGenerator<'a> {
             },
         };
         let logits_processor = LogitsProcessor::from_sampling(rand::random::<u64>(), sampling);
-        let rep_pen_processors: Vec<RepPenProcessor> = (0..model.cfg.num_codebooks)
+        let rep_pen_processors: Vec<SingleBatchedRepPenProcessor> = (0..model.cfg.num_codebooks)
             .map(|_| {
-                RepPenProcessor::new(
+                SingleBatchedRepPenProcessor::new(
                     model.cfg.codebook_size,
                     16,
                     sampling_args.repetition_penalty,

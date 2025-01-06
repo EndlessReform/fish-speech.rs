@@ -10,9 +10,9 @@ use fish_speech_core::config::{WhichFishVersion, WhichLM};
 use fish_speech_core::models::lm::generate::{
     generate_blocking_with_hidden, generate_static_batch,
 };
+use fish_speech_core::models::lm::sampling::SamplingArgs;
 use fish_speech_core::models::lm::utils::{
     encode::{encode_chunks, EncodedChunks},
-    sample::SamplingArgs,
     text::preprocess_text,
 };
 use serde::{Deserialize, Serialize};
@@ -79,9 +79,22 @@ pub async fn generate_pcm_batched(
 ) -> anyhow::Result<Tensor> {
     let mut model = state.lm.model.lock().await;
 
+    let sampling_args = SamplingArgs {
+        temp: state.lm.default_temp,
+        // Currently not used
+        top_k: 256,
+        // Ignored
+        top_p: state.lm.default_top_p,
+        repetition_penalty: 1.3,
+    };
     // No sampling configurable for now
-    let (sequences, _) =
-        generate_static_batch(&mut model, encoded_input, state.lm.max_new_tokens, true)?;
+    let (sequences, _) = generate_static_batch(
+        &mut model,
+        encoded_input,
+        state.lm.max_new_tokens,
+        true,
+        sampling_args,
+    )?;
 
     model.clear_slow_layer_caches();
     // By invariant, batch items are returned in order
