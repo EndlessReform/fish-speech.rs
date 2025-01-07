@@ -1,6 +1,8 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
 use crate::config::WhichLM;
-use crate::models::lm::sampling::{rep_pen::BatchedRepPenProcessor, SamplingArgs};
+use crate::models::lm::sampling::{
+    rep_pen::BatchedRepPenProcessor, BatchedLogitsProcessor, SamplingArgs,
+};
 use crate::models::lm::DualARTransformer;
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -24,7 +26,7 @@ pub struct BatchGenerator<'a> {
     batch_item_is_dead: Vec<bool>,
     bsz: usize,
     rep_pen_processors: Vec<BatchedRepPenProcessor>,
-    sampling_args: SamplingArgs,
+    logits_processor: BatchedLogitsProcessor,
 }
 
 impl<'a> BatchGenerator<'a> {
@@ -60,7 +62,7 @@ impl<'a> BatchGenerator<'a> {
             audio_only,
             batch_item_is_dead: vec![false; prompts.len()],
             bsz: prompts.len(),
-            sampling_args,
+            logits_processor: BatchedLogitsProcessor::new(42, sampling_args),
         })
     }
 
@@ -146,14 +148,7 @@ impl<'a> Iterator for BatchGenerator<'a> {
             } else {
                 slow_logits
             };
-            // TODO add fancier sampling for batch (temp is low-hanging fruit)
-            // Argmax sampling for now to prove correctness of rest of harness
-            let raw_slow_ids = slow_logits
-                .argmax(D::Minus1)?
-                .to_device(&Device::Cpu)?
-                .flatten_all()?
-                .to_vec1::<u32>()?;
-            let raw_slow_ids = raw_slow_ids;
+            let raw_slow_ids = self.logits_processor.sample(&slow_logits)?;
 
             let slow_ids = if self.audio_only {
                 rescale_semantic_tokens(
@@ -208,13 +203,7 @@ impl<'a> Iterator for BatchGenerator<'a> {
                     .forward_generate_fast(&x, codebook_idx)?
                     .to_dtype(candle_core::DType::F32)?;
                 let fast_logits = rep_pen.apply_mask(&fast_logits)?;
-
-                // TODO: put sampling here too
-                let ids = fast_logits
-                    .argmax(D::Minus1)?
-                    .to_device(&Device::Cpu)?
-                    .flatten_all()?
-                    .to_vec1::<u32>()?;
+                let ids = self.logits_processor.sample(&fast_logits)?;
                 // Prime hidden state WTE for next round
                 // Unsqueeze seqlen, yeah it's always (bsz, seqlen=1, hidden_dim) but downstream doesn't know that
                 rep_pen.update_mask(ids.clone())?;

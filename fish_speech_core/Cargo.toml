@@ -33,6 +33,7 @@ indicatif = "0.17.8"
 num = "0.4.3"
 num-traits = "0.2.19"
 rand = "0.8.5"
+rayon = "1.10.0"
 regex = "1.10.6"
 rustfft = "6.2.0"
 serde = { version = "1.0.208", features = ["derive"] }
