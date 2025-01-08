@@ -22,6 +22,7 @@ metal = [
     "moshi/metal",
 ]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
+mimi = ["dep:moshi"]
 
 
 [dependencies]
@@ -41,7 +42,7 @@ futures = "0.3.31"
 futures-util = "0.3.31"
 hf-hub = "0.4.1"
 indicatif = "0.17.8"
-moshi = "0.2.4"
+moshi = { version = "0.2.4", optional = true }
 num = "0.4.3"
 num-traits = "0.2.19"
 ogg = { version = "0.9.1", features = ["tokio-util", "async"] }

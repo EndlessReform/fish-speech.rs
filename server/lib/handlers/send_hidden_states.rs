@@ -5,7 +5,6 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
-use fish_speech_core::models::lm::sampling::SamplingArgs;
 use fish_speech_core::models::lm::utils::{encode::encode_chunks, text::preprocess_text};
 use serde::Deserialize;
 use std::io::{Cursor, Write};
@@ -49,17 +48,11 @@ pub async fn generate_hidden_states(
     let mut all_pcm: Vec<f32> = Vec::new();
 
     // Non-streaming path stays relatively simple
-    let sampling_args = SamplingArgs {
-        temp: state.lm.default_temp,
-        top_p: state.lm.default_top_p,
-        top_k: 256,
-        repetition_penalty: 1.2,
-    };
     for prompt in prompts.chunks.iter() {
         let (semantic_tokens, maybe_hidden) = server_lm_generate_blocking(
             state.clone(),
             prompt,
-            &sampling_args,
+            &state.lm.default_sampling_args,
             prompts.n_conditioning_tokens,
             true,
         )

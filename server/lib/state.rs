@@ -2,6 +2,7 @@ use super::audio::codec::Codec;
 use candle_core::{Device, Tensor};
 use fish_speech_core::config::{WhichLM, WhichModel};
 use fish_speech_core::models::lm::dual_ar::BaseModelArgs;
+use fish_speech_core::models::lm::sampling::SamplingArgs;
 use fish_speech_core::models::lm::DualARTransformer;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,8 +16,7 @@ pub struct LMState {
     pub tokenizer: Arc<Tokenizer>,
     pub voices: Arc<Mutex<HashMap<String, Tensor>>>,
     pub default_voice: Arc<Tensor>,
-    pub default_temp: f64,
-    pub default_top_p: f64,
+    pub default_sampling_args: SamplingArgs,
     pub max_new_tokens: usize,
 }
 

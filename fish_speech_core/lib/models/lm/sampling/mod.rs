@@ -25,6 +25,7 @@ pub fn legacy_softmax_sample(pad_prob: f32, eos_prob: f32, pad_id: u32, eos_id: 
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct SamplingArgs {
     pub temp: f64,
     pub top_p: f64,

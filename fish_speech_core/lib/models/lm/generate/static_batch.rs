@@ -4,7 +4,7 @@ use crate::models::lm::sampling::{
     rep_pen::BatchedRepPenProcessor, BatchedLogitsProcessor, SamplingArgs,
 };
 use crate::models::lm::DualARTransformer;
-use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{IndexOp, Module, Result, Tensor, D};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
 
@@ -38,7 +38,7 @@ impl<'a> BatchGenerator<'a> {
         audio_only: bool,
         sampling_args: SamplingArgs,
     ) -> Result<Self> {
-        let (prompt, pad_mask) = BatchGenerator::pad_prompts(prompts, model, max_new_tokens)?;
+        let (prompt, pad_mask) = BatchGenerator::pad_prompts(prompts, model)?;
         let bsz = prompts.len();
 
         Ok(Self {
@@ -67,11 +67,7 @@ impl<'a> BatchGenerator<'a> {
     }
 
     // returns (prompt, mask) concatenated
-    fn pad_prompts(
-        prompts: &[Tensor],
-        model: &DualARTransformer,
-        max_new_tokens: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    fn pad_prompts(prompts: &[Tensor], model: &DualARTransformer) -> Result<(Tensor, Tensor)> {
         if prompts.len() == 0 {
             candle_core::bail!("Must have at least one prompt")
         }
@@ -80,12 +76,6 @@ impl<'a> BatchGenerator<'a> {
             .map(|p| p.dim(D::Minus1))
             .collect::<Result<_>>()?;
         let max_prefill_length = *prompt_lengths.iter().max().unwrap();
-        if max_prefill_length > max_new_tokens {
-            candle_core::bail!(
-                "At least one prompt is longer than max seq len of {} tokens",
-                max_new_tokens
-            );
-        }
 
         let codebook_pad_tensor = Tensor::zeros(
             (model.cfg.num_codebooks, max_prefill_length),
@@ -103,7 +93,11 @@ impl<'a> BatchGenerator<'a> {
 
         let mut padded_prompts = Vec::with_capacity(prompts.len());
         let mut pad_masks = Vec::with_capacity(prompts.len());
-        let range = Tensor::arange(0u32, max_prefill_length as u32, prompts[0].device())?;
+        let range = Tensor::from_vec(
+            (0..max_prefill_length as u32).collect::<Vec<u32>>(),
+            max_prefill_length,
+            prompts[0].device(),
+        )?;
 
         for (p, &l) in prompts.iter().zip(&prompt_lengths) {
             padded_prompts.push(Tensor::cat(
@@ -133,8 +127,6 @@ impl<'a> Iterator for BatchGenerator<'a> {
         }
         let prompt = self.prompt.as_ref().unwrap().clone();
         let result = (|| {
-            // println!("Trying generating at pos {}", self.input_pos);
-            // println!("Prompt size: {:?}", prompt.shape());
             let (slow_logits, hidden_states) =
                 self.model
                     .forward_generate(&prompt, self.input_pos, self.pad_mask.clone())?;
@@ -149,7 +141,6 @@ impl<'a> Iterator for BatchGenerator<'a> {
                 slow_logits
             };
             let raw_slow_ids = self.logits_processor.sample(&slow_logits)?;
-
             let slow_ids = if self.audio_only {
                 rescale_semantic_tokens(
                     raw_slow_ids,
@@ -314,20 +305,21 @@ pub fn generate_static_batch(
             .tick_chars("/|\\- "),
     );
     spinner.enable_steady_tick(Duration::from_millis(100));
+    println!("Sequences");
 
     let start_decode = Instant::now();
     for (i, maybe_batch_pos) in generator.into_iter().enumerate() {
         let vq_token = maybe_batch_pos?;
-        for (j, (seq, pos)) in sequences.iter_mut().zip(vq_token.into_iter()).enumerate() {
+        // let mut items: Vec<String> = Vec::with_capacity(sequences.len());
+        for (_, (seq, pos)) in sequences.iter_mut().zip(vq_token.into_iter()).enumerate() {
             if !(audio_only && !pos.is_active) {
                 seq.tokens.push(pos.codes);
                 seq.is_audio_steps.push(pos.is_audio);
-                println!("Pushing for {}", j);
+                // items.push(format!("{} on,  ", j));
             } else {
-                println!("Pos in batch {} inactive; doing nothing", j);
+                // items.push(format!("{} off, ", j));
             }
         }
-
         spinner.inc(1);
         spinner.set_message(format!("Tokens: {}", i));
     }
@@ -337,7 +329,15 @@ pub fn generate_static_batch(
     // TODO Completely arbitrary unprincipled decision for debugging, remove this as soon as humanly possible
     // sequences.drain(0..1);
     // println!("Your sequence is getting invisibly truncated, remove this!");
-    let out_len = sequences[0].is_audio_steps.len() as f64;
+    let out_len = sequences
+        .iter()
+        .map(|s| s.is_audio_steps.len())
+        .sum::<usize>() as f64;
+    let max_len = sequences
+        .iter()
+        .map(|s| s.is_audio_steps.len())
+        .max()
+        .unwrap_or(0);
     if out_len == 1.0 && audio_only {
         candle_core::bail!(
             "No audio generated; model immediately picked <|im_end|> for all steps. Please check your masks"
@@ -365,11 +365,11 @@ pub fn generate_static_batch(
         _ => 21.535,
     };
     println!(
-        "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
+        "{} tokens generated in {:.3}s ({:.2} tokens/s throughput, {:.3}ms / step, RTF: {:.3})",
         out_len,
         dt.as_secs_f64(),
         out_len / dt.as_secs_f64(),
-        (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
+        (dt.as_secs_f64() * 1e3) / (max_len as f64 - 1f64),
         (out_len / frame_rate) / dt.as_secs_f64()
     );
 

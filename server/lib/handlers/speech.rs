@@ -79,21 +79,13 @@ pub async fn generate_pcm_batched(
 ) -> anyhow::Result<Tensor> {
     let mut model = state.lm.model.lock().await;
 
-    let sampling_args = SamplingArgs {
-        temp: state.lm.default_temp,
-        // Currently not used
-        top_k: 256,
-        // Ignored
-        top_p: state.lm.default_top_p,
-        repetition_penalty: 1.3,
-    };
     // No sampling configurable for now
     let (sequences, _) = generate_static_batch(
         &mut model,
         encoded_input,
         state.lm.max_new_tokens,
         true,
-        sampling_args,
+        state.lm.default_sampling_args.clone(),
     )?;
 
     model.clear_slow_layer_caches();
@@ -121,18 +113,10 @@ async fn generate_pcm_chunk(
     encoded_input: &Tensor,
     n_conditioning_tokens: usize,
 ) -> anyhow::Result<Tensor> {
-    let sampling_args = SamplingArgs {
-        temp: state.lm.default_temp,
-        top_p: state.lm.default_top_p,
-        top_k: 256,
-        // TODO: make this default!
-        repetition_penalty: 1.3,
-    };
-
     let (semantic_tokens, _) = server_lm_generate_blocking(
         state.clone(),
         encoded_input,
-        &sampling_args,
+        &state.lm.default_sampling_args,
         n_conditioning_tokens,
         false,
     )
@@ -144,27 +128,33 @@ async fn generate_pcm_chunk(
 async fn generate_speech_blocking(
     state: Arc<AppState>,
     prompts: EncodedChunks,
+    maybe_bsz: Option<usize>,
 ) -> Result<Response<Body>, AppError> {
     let mut all_pcm = Vec::new();
 
-    // Initial prefill
-    // for (i, prompt) in prompts.chunks.iter().enumerate() {
-    //     println!("Beginning chunk {} of {}", i, prompts.chunks.len());
-    //     let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
-    //         .await?
-    //         .to_vec1::<f32>()?;
-    //     all_pcm.extend(pcm);
-    // }
-    //
-    // TODO this is complete vandalism! DO NOT FUCKING MERGE THIS PUT IT BACK YOU FOOL
-    const BSZ: usize = 8;
-    for (i, batch) in prompts.chunks.chunks(BSZ).enumerate() {
-        println!("Processing batch {} ({}) prompts", i, batch.len());
-        let pcm = generate_pcm_batched(state.clone(), batch)
-            .await?
-            .to_vec1::<f32>()?;
-        all_pcm.extend(pcm);
+    match maybe_bsz {
+        Some(batch_size) => {
+            // Opt-in internal batching
+            for (i, batch) in prompts.chunks.chunks(batch_size).enumerate() {
+                println!("Processing batch {} ({}) prompts", i, batch.len());
+                let pcm = generate_pcm_batched(state.clone(), batch)
+                    .await?
+                    .to_vec1::<f32>()?;
+                all_pcm.extend(pcm);
+            }
+        }
+        None => {
+            // Single batch
+            for (i, prompt) in prompts.chunks.iter().enumerate() {
+                println!("Beginning chunk {} of {}", i, prompts.chunks.len());
+                let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
+                    .await?
+                    .to_vec1::<f32>()?;
+                all_pcm.extend(pcm);
+            }
+        }
     }
+    // Initial prefill
     println!("Generation complete");
     let mut model = state.lm.model.lock().await;
     // Final cache eviction
@@ -239,16 +229,17 @@ async fn generate_speech_streaming(
         .context("Failed to build streaming response")?)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateRequest {
-    model: String, // Ignored for now
-    voice: String,
-    input: String,
+    pub model: String, // Ignored for now
+    pub voice: String,
+    pub input: String,
     /// Default: WAV
-    response_format: Option<String>,
+    pub response_format: Option<String>,
+    pub batch_size: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateResponse {
     audio: Vec<f32>,
 }
@@ -281,13 +272,13 @@ pub async fn generate_speech(
         voice_embedding,
         num_codebooks,
         state.lm.model_type,
-        // TODO DO NOT MERGE, THIS IS A HACK
-        false,
+        // KV cache kept between requests for single batch only
+        request.batch_size.is_none(),
     )?;
 
     if request.response_format == Some("opus".into()) {
         generate_speech_streaming(state, prompts).await
     } else {
-        generate_speech_blocking(state, prompts).await
+        generate_speech_blocking(state, prompts, request.batch_size).await
     }
 }

@@ -573,10 +573,11 @@ impl DualARTransformer {
             1 => self.get_mask_abs(1, 1, x.device())?,
             _ => self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
         };
-        // println!("Mask shape: {:?}", mask.shape());
-        // println!("{:?}", inp.to_device(&Device::Cpu)?.to_vec3::<u32>());
         let mask = match pad_mask {
-            Some(key_padding_mask) => {
+            Some(_) => {
+                // Yes, this commented code is terrible. This does not work and I cannot figure out why.
+                // I will come back to this later.
+                //
                 // Unlike in Torch, 0 is keep, 1 is MASK.
                 // We GET 0: mask 1: keep, so flip it
                 // Yes, this is terrible. Candle.rs has no booleans so this is what we got
@@ -584,17 +585,18 @@ impl DualARTransformer {
                 //     "Inverted padding mask: {:?}",
                 //     key_padding_mask.to_device(&Device::Cpu)?.to_vec2::<u8>()?
                 // );
-                let inverted_padding =
-                    Tensor::ones_like(&key_padding_mask)?.sub(&key_padding_mask)?;
-
+                // let inverted_padding =
+                //     Tensor::ones_like(&key_padding_mask)?.sub(&key_padding_mask)?;
+                // // let inverted_padding = key_padding_mask;
                 // println!(
                 //     "Inverted padding mask: {:?}",
                 //     inverted_padding.to_device(&Device::Cpu)?.to_vec2::<u8>()?
                 // );
-                let mask = mask.reshape((1, 1, seq_len, seq_len))?;
-                // Logical AND
-                // 0, 0 (keep, keep) -> keep, otherwise 1 (mask)
-                mask.broadcast_maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
+                // let mask = mask.reshape((1, 1, seq_len, seq_len))?;
+                // // Logical AND
+                // // 0, 0 (keep, keep) -> keep, otherwise 1 (mask)
+                // mask.broadcast_maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
+                mask.expand((bsz, 1, seq_len, seq_len))?
             }
             None => mask,
         };
@@ -610,12 +612,10 @@ impl DualARTransformer {
                 ),
             )?;
         }
-        // println!("Done, proceeding to narrow");
 
         let x = x.narrow(1, seq_len - 1, 1)?;
         let slow_out = self.norm.forward(&x)?;
         let token_logits = self.output.forward(&slow_out)?;
-        // println!("Token logits shape: {:?}", token_logits.shape());
 
         // Only calculate the logits of last_token
         Ok((token_logits, x))
