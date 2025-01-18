@@ -47,6 +47,7 @@ async fn run_speech_test() -> anyhow::Result<()> {
         input: "The quick brown fox jumped over the lazy dog".to_string(),
         response_format: Some("wav".to_string()),
         batch_size: None,
+        speaker_prompt: None,
     };
 
     println!("Creating first request with batch_size=1");
@@ -68,6 +69,7 @@ async fn run_speech_test() -> anyhow::Result<()> {
         input: "The quick brown fox jumped over the lazy dog".to_string(),
         response_format: Some("wav".to_string()),
         batch_size: Some(1),
+        speaker_prompt: None,
     };
 
     println!("Creating first request with batch_size=1");
@@ -89,6 +91,7 @@ async fn run_speech_test() -> anyhow::Result<()> {
         input: long_text,
         response_format: Some("wav".to_string()),
         batch_size: Some(4),
+        speaker_prompt: None,
     };
 
     println!("Creating second request with batch_size=4");

@@ -115,6 +115,7 @@ pub fn encode_chunks(
     chunks: Vec<TextChunk>,
     device: &Device,
     cached_speaker: Option<Tensor>,
+    sysprompt_text: Option<String>,
     num_codebooks: usize,
     model_type: WhichLM,
     assume_kv_cache: bool,
@@ -122,9 +123,15 @@ pub fn encode_chunks(
     let mut encoded_chunks = Vec::new();
 
     let prompt_encoder = PromptEncoder::new(tokenizer, device, num_codebooks, model_type);
-    // TODO: make this configurable if lenguye says this works
-    let system_prompt =
-        prompt_encoder.encode_text("system", Some("Speak out the provided text"))?;
+    let has_sysprompt = match model_type {
+        WhichLM::Fish(WhichFishVersion::Fish1_5) => true,
+        // Make it optional
+        WhichLM::DualAR => sysprompt_text.is_some(),
+        _ => false,
+    };
+    // Default is the sysprompt from the Fish Speech codebase
+    let sysprompt_text = sysprompt_text.unwrap_or("Speak out the provided text.".into());
+    let system_prompt = prompt_encoder.encode_text("system", Some(&sysprompt_text))?;
     let assistant_start = prompt_encoder.encode_vq(None)?;
     let n_conditioning_tokens = match &cached_speaker {
         Some(t) => system_prompt.dim(1)? + t.dim(1)?,
@@ -138,29 +145,19 @@ pub fn encode_chunks(
         // Format each chunk with the dialogue markers
         let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
 
-        let encoded = if let Some(conditioning_tokens) = cached_speaker.as_ref() {
-            // Assume the preprocessing code from earlier worked fine
-            if i == 0 || !assume_kv_cache {
-                Tensor::cat(
-                    &[
-                        system_prompt.clone(),
-                        conditioning_tokens.clone(),
-                        user_request,
-                        assistant_start.clone(),
-                    ],
-                    1,
-                )?
-            } else {
-                // Assume system prompt and conditioning are already in KV cache
-                Tensor::cat(&[user_request, assistant_start.clone()], 1)?
-            }
-        } else {
-            Tensor::cat(
-                &[system_prompt.clone(), user_request, assistant_start.clone()],
-                1,
-            )?
+        let mut prompt: Vec<Tensor> = Vec::new();
+        if i == 0 || !assume_kv_cache {
+            if has_sysprompt {
+                prompt.push(system_prompt.clone());
+            };
+            if let Some(conditioning_tokens) = cached_speaker.as_ref() {
+                prompt.push(conditioning_tokens.clone());
+            };
         };
+        prompt.push(user_request);
+        prompt.push(assistant_start.clone());
 
+        let encoded = Tensor::cat(&prompt, 1)?;
         encoded_chunks.push(encoded);
     }
 

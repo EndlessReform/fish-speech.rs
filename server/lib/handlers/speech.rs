@@ -4,7 +4,7 @@ use crate::state::AppState;
 use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
-use candle_core::{Tensor, D};
+use candle_core::{IndexOp, Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::config::{WhichFishVersion, WhichLM};
 use fish_speech_core::models::lm::generate::{
@@ -99,8 +99,15 @@ pub async fn vocode_semantic_tokens(
     semantic_tokens: &Tensor,
 ) -> anyhow::Result<Tensor> {
     let vocoder_start = Instant::now();
+    let (_, seqlen) = semantic_tokens.dims2()?;
+    println!("Shape: {:?}, seqlen: {}", semantic_tokens.shape(), seqlen);
+    let tokens = match state.lm.model_type {
+        WhichLM::DualAR => semantic_tokens.i((.., ..seqlen - 1))?,
+        _ => semantic_tokens.clone(),
+    };
+    println!("Tokens shape: {:?},s eqlen: {}", tokens.shape(), seqlen);
 
-    let out = state.codec.decode_batch(semantic_tokens).await?;
+    let out = state.codec.decode_batch(&tokens).await?;
     let duration = vocoder_start.elapsed();
     println!("Vocoding took: {} ms", duration.as_millis());
 
@@ -147,6 +154,7 @@ async fn generate_speech_blocking(
             // Single batch
             for (i, prompt) in prompts.chunks.iter().enumerate() {
                 println!("Beginning chunk {} of {}", i, prompts.chunks.len());
+                println!("Prompt: {:?}", prompt.i((0, ..))?.to_vec1::<u32>()?);
                 let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
                     .await?
                     .to_vec1::<f32>()?;
@@ -237,6 +245,7 @@ pub struct GenerateRequest {
     /// Default: WAV
     pub response_format: Option<String>,
     pub batch_size: Option<usize>,
+    pub speaker_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -270,6 +279,7 @@ pub async fn generate_speech(
         chunks,
         &state.device,
         voice_embedding,
+        request.speaker_prompt,
         num_codebooks,
         state.lm.model_type,
         // KV cache kept between requests for single batch only

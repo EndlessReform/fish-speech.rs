@@ -39,6 +39,7 @@ pub async fn generate_hidden_states(
         chunks,
         &state.device,
         Some(voice_embedding),
+        None,
         num_codebooks,
         state.lm.model_type,
         true,

@@ -149,6 +149,11 @@ impl<'a> Iterator for SingleBatchGenerator<'a> {
             let mut x = hidden_states.clone();
             // TODO: Skip this and short-circuit when we handle generating text only
             for codebook_idx in 0..self.model.cfg.num_codebooks {
+                // Skip final generation step
+                if self.audio_only && semantic_token == self.model.token_config.im_end_id {
+                    codebooks.push(0);
+                    continue;
+                }
                 let logits = self
                     .model
                     .forward_generate_fast(&x, codebook_idx)?
