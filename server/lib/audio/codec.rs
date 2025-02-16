@@ -1,21 +1,12 @@
 use crate::audio::mimi;
-use candle_core::{DType, Result, Tensor, D};
-use fish_speech_core::audio::spectrogram::LogMelSpectrogram;
-use fish_speech_core::models::vqgan::config::FireflyConfig;
-use fish_speech_core::models::{vqgan::decoder::FireflyDecoder, vqgan::encoder::FireflyEncoder};
+use candle_core::{Result, Tensor};
+use fish_speech_core::codec::FireflyCodec;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub struct HiFiGANState {
-    pub decoder_model: Arc<FireflyDecoder>,
-    pub encoder_model: Arc<FireflyEncoder>,
-    pub firefly_config: Arc<FireflyConfig>,
-    pub spec_transform: Arc<LogMelSpectrogram>,
-}
-
 pub enum Codec {
     Mimi(Arc<Mutex<mimi::Tokenizer>>),
-    HiFiGAN(HiFiGANState),
+    Firefly(Arc<FireflyCodec>),
 }
 
 impl Codec {
@@ -33,10 +24,7 @@ impl Codec {
                 println!("out: {:?}", out);
                 out
             }
-            Codec::HiFiGAN(state) => {
-                let mels = state.spec_transform.forward(&audio)?;
-                state.encoder_model.encode(&mels)
-            }
+            Codec::Firefly(state) => state.encode(&audio),
         }
     }
 
@@ -53,18 +41,7 @@ impl Codec {
                 model.reset();
                 tokens
             }
-            Codec::HiFiGAN(state) => {
-                let feature_lengths = Tensor::from_slice(
-                    &[semantic_tokens.dim(D::Minus1)? as u32],
-                    1,
-                    &state.decoder_model.device,
-                )?;
-
-                state
-                    .decoder_model
-                    .decode(&semantic_tokens, &feature_lengths)?
-                    .to_dtype(DType::F32)
-            }
+            Codec::Firefly(state) => state.decode(&semantic_tokens),
         }
     }
 }
