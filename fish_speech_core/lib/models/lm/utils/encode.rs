@@ -146,7 +146,7 @@ pub fn encode_chunks(
         let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
 
         let mut prompt: Vec<Tensor> = Vec::new();
-        if i == 0 || !assume_kv_cache {
+        if model_type == WhichLM::DualAR || !assume_kv_cache || i == 0 {
             if has_sysprompt {
                 prompt.push(system_prompt.clone());
             };

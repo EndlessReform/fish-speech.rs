@@ -189,19 +189,34 @@ impl<'a> Iterator for BatchGenerator<'a> {
             for (codebook_idx, rep_pen) in
                 (0..self.model.cfg.num_codebooks).zip(self.rep_pen_processors.iter_mut())
             {
+                let is_depthwise =
+                    self.model.cfg.depthwise_wte.is_some() && self.model.cfg.depthwise_wte.unwrap();
                 let fast_logits = self
                     .model
                     .forward_generate_fast(&x, codebook_idx)?
                     .to_dtype(candle_core::DType::F32)?;
-                let fast_logits = rep_pen.apply_mask(&fast_logits)?;
+                let fast_logits = match self.model.cfg.depthwise_wte {
+                    Some(true) => fast_logits,
+                    _ => rep_pen.apply_mask(&fast_logits)?,
+                };
+
                 let ids = self.logits_processor.sample(&fast_logits)?;
                 // Prime hidden state WTE for next round
                 // Unsqueeze seqlen, yeah it's always (bsz, seqlen=1, hidden_dim) but downstream doesn't know that
-                rep_pen.update_mask(ids.clone())?;
+                if is_depthwise {
+                    rep_pen.update_mask(ids.clone())?;
+                }
+                let ids_tensor = &Tensor::from_slice(&ids, ids.len(), x.device())?;
+                let ids_tensor = if is_depthwise {
+                    let offset = codebook_idx * self.model.cfg.codebook_size;
+                    &(ids_tensor + offset as f64)?
+                } else {
+                    ids_tensor
+                };
                 x = self
                     .model
                     .fast_embeddings
-                    .forward(&Tensor::from_slice(&ids, ids.len(), x.device())?)?
+                    .forward(ids_tensor)?
                     .unsqueeze(1)?;
                 for (idx_in_batch, id) in ids.iter().enumerate() {
                     codebook_ids[idx_in_batch].push(*id);
