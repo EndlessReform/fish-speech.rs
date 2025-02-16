@@ -7,7 +7,7 @@ use moshi as mm;
 
 pub struct Tokenizer {
     #[cfg(feature = "mimi")]
-    model: mm::encodec::Encodec,
+    model: mm::mimi::Mimi,
     #[cfg(not(feature = "mimi"))]
     _unused: (), // Placeholder for no-moshi version
     device: Device,
@@ -19,9 +19,9 @@ impl Tokenizer {
     pub fn load(vb: VarBuilder, num_codebooks: usize) -> Result<(Self, u32)> {
         #[cfg(feature = "mimi")]
         {
-            let cfg = mm::encodec::Config::v0_1(Some(num_codebooks));
+            let cfg = mm::mimi::Config::v0_1(Some(num_codebooks));
             let sample_rate = cfg.sample_rate as u32;
-            let model = mm::encodec::Encodec::new(cfg, vb.clone())?;
+            let model = mm::mimi::Mimi::new(cfg, vb.clone())?;
             Ok((
                 Self {
                     model,

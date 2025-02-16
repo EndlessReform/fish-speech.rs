@@ -74,6 +74,10 @@ pub struct BaseModelArgs {
     pub tie_word_embeddings: bool,
     pub use_gradient_checkpointing: bool,
     pub vocab_size: usize,
+    #[serde(default)]
+    pub depthwise_wte: Option<bool>,
+    #[serde(default)]
+    pub depthwise_output: Option<bool>,
 }
 
 impl BaseModelArgs {
@@ -98,6 +102,8 @@ impl BaseModelArgs {
             codebook_size: 1024,
             num_codebooks: 4,
             use_gradient_checkpointing: true,
+            depthwise_wte: Some(false),
+            depthwise_output: Some(false),
         }
     }
 
@@ -216,7 +222,6 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        // let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
         let kv_cache = None;
 
         Ok(Self {
@@ -483,8 +488,12 @@ impl DualARTransformer {
             .contiguous()?,
             None,
         );
+        let fast_emb_dim = match cfg.depthwise_wte {
+            Some(true) => (cfg.num_codebooks - 1) * cfg.codebook_size,
+            _ => cfg.codebook_size,
+        };
         let fast_embeddings = Embedding::new(
-            vb.get((cfg.codebook_size, cfg.dim), "fast_embeddings.weight")?,
+            vb.get((fast_emb_dim, cfg.dim), "fast_embeddings.weight")?,
             cfg.dim,
         );
         let fast_layers: Result<Vec<TransformerBlock>> = (0..cfg.n_fast_layer)
@@ -492,8 +501,12 @@ impl DualARTransformer {
             .collect();
         let fast_layers = fast_layers?;
         let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
+        let fast_output_size = match cfg.depthwise_output {
+            Some(true) => cfg.codebook_size * cfg.num_codebooks,
+            _ => cfg.codebook_size,
+        };
         let fast_output = Linear::new(
-            vb.get((cfg.codebook_size, cfg.dim), "fast_output.weight")?,
+            vb.get((fast_output_size, cfg.dim), "fast_output.weight")?,
             None,
         );
         let freqs_cis = precompute_freqs_cis(cfg, vb.device(), vb.dtype())?;
