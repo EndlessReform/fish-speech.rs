@@ -1,14 +1,18 @@
 use super::error::AppError;
-use crate::opus::OpusEncoder;
+use crate::audio::opus::OpusEncoder;
 use crate::state::AppState;
 use anyhow::{Context, Result};
 use axum::{body::Body, extract::State, http::StatusCode, response::Response, Json};
 use bytes::Bytes;
-use candle_core::{DType, Tensor, D};
+use candle_core::{IndexOp, Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
-use fish_speech_core::models::text2semantic::utils::encode::EncodedChunks;
-use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks, generate::generate_blocking_with_hidden, sample::SamplingArgs,
+use fish_speech_core::config::{WhichFishVersion, WhichLM};
+use fish_speech_core::models::lm::generate::{
+    generate_blocking_with_hidden, generate_static_batch,
+};
+use fish_speech_core::models::lm::sampling::SamplingArgs;
+use fish_speech_core::models::lm::utils::{
+    encode::{encode_chunks, EncodedChunks},
     text::preprocess_text,
 };
 use serde::{Deserialize, Serialize};
@@ -18,22 +22,17 @@ use tokio::sync::Mutex;
 
 // Blocking token generation
 pub async fn server_lm_generate_blocking(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     encoded_input: &Tensor,
     sampling_args: &SamplingArgs,
     n_conditioning_tokens: usize,
     collect_hidden_states: bool,
 ) -> Result<(Tensor, Option<Tensor>), anyhow::Error> {
-    // Arbitrary number
-    let max_tokens: usize = 768;
-
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     let (tokens, hidden_states) = generate_blocking_with_hidden(
         &mut model,
         &encoded_input,
-        max_tokens,
-        state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-        state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+        state.lm.max_new_tokens,
         sampling_args,
         collect_hidden_states,
     )
@@ -43,19 +42,17 @@ pub async fn server_lm_generate_blocking(
     let mut hidden_states = hidden_states;
     // It's the caller's responsibility to do final clear
     model.clear_slow_caches_until(n_conditioning_tokens)?;
-    if tokens.dim(D::Minus1)? == max_tokens {
+    if tokens.dim(D::Minus1)? == state.lm.max_new_tokens {
         println!("Failed generation suspected. Rerolling once");
         let (new_tokens, new_hidden_states) = generate_blocking_with_hidden(
             &mut model,
             &encoded_input,
-            1024,
-            state.tokenizer.token_to_id("<|im_end|>").unwrap_or(4),
-            state.tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+            state.lm.max_new_tokens,
             sampling_args,
             collect_hidden_states,
         )
         .context("Failed to generate tokens")?;
-        if new_tokens.dim(D::Minus1)? != max_tokens {
+        if new_tokens.dim(D::Minus1)? != state.lm.max_new_tokens {
             tokens = new_tokens;
             hidden_states = new_hidden_states;
         } else {
@@ -66,8 +63,8 @@ pub async fn server_lm_generate_blocking(
         }
     }
 
-    let tokens = match state.model_type {
-        fish_speech_core::models::vqgan::config::WhichModel::Fish1_5 => tokens,
+    let tokens = match state.lm.model_type {
+        WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => tokens,
         _ => tokens
             .broadcast_sub(&Tensor::ones_like(&tokens).context("Failed to create ones tensor")?)
             .context("Failed to broadcast subtract")?,
@@ -76,19 +73,41 @@ pub async fn server_lm_generate_blocking(
     Ok((tokens, hidden_states))
 }
 
+pub async fn generate_pcm_batched(
+    state: Arc<AppState>,
+    encoded_input: &[Tensor],
+) -> anyhow::Result<Tensor> {
+    let mut model = state.lm.model.lock().await;
+
+    // No sampling configurable for now
+    let (sequences, _) = generate_static_batch(
+        &mut model,
+        encoded_input,
+        state.lm.max_new_tokens,
+        true,
+        state.lm.default_sampling_args.clone(),
+    )?;
+
+    model.clear_slow_layer_caches();
+    // By invariant, batch items are returned in order
+    let semantic_tokens = Tensor::cat(&sequences, D::Minus1)?;
+    vocode_semantic_tokens(state.clone(), &semantic_tokens).await
+}
+
 pub async fn vocode_semantic_tokens(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     semantic_tokens: &Tensor,
 ) -> anyhow::Result<Tensor> {
     let vocoder_start = Instant::now();
-    let feature_lengths =
-        Tensor::from_slice(&[semantic_tokens.dim(D::Minus1)? as u32], 1, &state.device)?;
+    let (_, seqlen) = semantic_tokens.dims2()?;
+    println!("Shape: {:?}, seqlen: {}", semantic_tokens.shape(), seqlen);
+    let tokens = match state.lm.model_type {
+        WhichLM::DualAR => semantic_tokens.i((.., ..seqlen - 1))?,
+        _ => semantic_tokens.clone(),
+    };
+    // println!("Tokens shape: {:?},s eqlen: {}", tokens.shape(), seqlen);
 
-    let out = state
-        .vocoder_model
-        .decode(&semantic_tokens.unsqueeze(0)?, &feature_lengths)?
-        .to_dtype(DType::F32)?;
-
+    let out = state.codec.decode_batch(&tokens).await?;
     let duration = vocoder_start.elapsed();
     println!("Vocoding took: {} ms", duration.as_millis());
 
@@ -97,51 +116,61 @@ pub async fn vocode_semantic_tokens(
 }
 
 async fn generate_pcm_chunk(
-    state: &Arc<AppState>,
+    state: Arc<AppState>,
     encoded_input: &Tensor,
     n_conditioning_tokens: usize,
 ) -> anyhow::Result<Tensor> {
-    let sampling_args = SamplingArgs {
-        temp: state.temp,
-        top_p: state.top_p,
-        top_k: 256,
-        repetition_penalty: 1.3,
-    };
-
     let (semantic_tokens, _) = server_lm_generate_blocking(
-        state,
+        state.clone(),
         encoded_input,
-        &sampling_args,
+        &state.lm.default_sampling_args,
         n_conditioning_tokens,
         false,
     )
     .await
     .context("Failed to generate semantic tokens")?;
-    vocode_semantic_tokens(state, &semantic_tokens).await
+    vocode_semantic_tokens(state.clone(), &semantic_tokens).await
 }
 
 async fn generate_speech_blocking(
     state: Arc<AppState>,
     prompts: EncodedChunks,
+    maybe_bsz: Option<usize>,
 ) -> Result<Response<Body>, AppError> {
     let mut all_pcm = Vec::new();
 
-    // Initial prefill
-    for (i, prompt) in prompts.chunks.iter().enumerate() {
-        println!("Beginning chunk {} of {}", i, prompts.chunks.len());
-        let pcm = generate_pcm_chunk(&state, prompt, prompts.n_conditioning_tokens)
-            .await?
-            .to_vec1::<f32>()?;
-        all_pcm.extend(pcm);
+    match maybe_bsz {
+        Some(batch_size) => {
+            // Opt-in internal batching
+            for (i, batch) in prompts.chunks.chunks(batch_size).enumerate() {
+                println!("Processing batch {} ({}) prompts", i, batch.len());
+                let pcm = generate_pcm_batched(state.clone(), batch)
+                    .await?
+                    .to_vec1::<f32>()?;
+                all_pcm.extend(pcm);
+            }
+        }
+        None => {
+            // Single batch
+            for (i, prompt) in prompts.chunks.iter().enumerate() {
+                println!("Beginning chunk {} of {}", i, prompts.chunks.len());
+                let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
+                    .await?
+                    .to_vec1::<f32>()?;
+                all_pcm.extend(pcm);
+            }
+        }
     }
+    // Initial prefill
     println!("Generation complete");
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     // Final cache eviction
     model.clear_slow_layer_caches();
     println!("Final cache cleared");
 
     let mut audio_buf = Vec::new();
-    write_pcm_as_wav(&mut audio_buf, &all_pcm, 44100).context("Failed to write PCM as WAV")?;
+    write_pcm_as_wav(&mut audio_buf, &all_pcm, state.sample_rate)
+        .context("Failed to write PCM as WAV")?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -154,7 +183,7 @@ async fn generate_speech_streaming(
     state: Arc<AppState>,
     prompts: EncodedChunks,
 ) -> Result<Response<Body>, AppError> {
-    const SRC_RATE: u32 = 44100;
+    let src_rate: u32 = state.sample_rate;
     const DST_RATE: u32 = 24000;
 
     // Move all stream setup before the stream definition
@@ -168,14 +197,14 @@ async fn generate_speech_streaming(
     let stream = async_stream::stream! {
         for (i, prompt) in prompts.chunks.iter().enumerate() {
             println!("Generating chunk {} of {}", i, prompts.chunks.len());
-            match generate_pcm_chunk(&stream_state, prompt, prompts.n_conditioning_tokens).await {
+            match generate_pcm_chunk(stream_state.clone(), prompt, prompts.n_conditioning_tokens).await {
                 Ok(pcm_data) => {
                     if i == prompts.chunks.len() - 1 {
-                        let mut model = stream_state.semantic_model.lock().await;
+                        let mut model = stream_state.lm.model.lock().await;
                         model.clear_slow_layer_caches();
                     };
                     let resample_start = std::time::Instant::now();
-                    let resampled_pcm: Tensor = resample(&pcm_data.unsqueeze(0).unwrap(), SRC_RATE, DST_RATE)
+                    let resampled_pcm: Tensor = resample(&pcm_data.unsqueeze(0).unwrap(), src_rate, DST_RATE)
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
                         .flatten_all()
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -207,45 +236,58 @@ async fn generate_speech_streaming(
         .context("Failed to build streaming response")?)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateRequest {
-    model: String, // Ignored for now
-    voice: String,
-    input: String,
-    response_format: Option<String>,
+    pub model: String, // Ignored for now
+    pub voice: String,
+    pub input: String,
+    /// Default: WAV
+    pub response_format: Option<String>,
+    pub batch_size: Option<usize>,
+    pub speaker_prompt: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateResponse {
     audio: Vec<f32>,
 }
+
 pub async fn generate_speech(
     State(state): State<Arc<AppState>>,
     Json(request): Json<GenerateRequest>,
 ) -> Result<Response<Body>, AppError> {
-    let voice_embedding = state
-        .voices
-        .lock()
-        .await
-        .get(&request.voice)
-        .unwrap_or(&state.default_voice)
-        .clone();
+    let voice_embedding = match &*request.voice {
+        "unconditioned" => None,
+        _ => Some(
+            state
+                .lm
+                .voices
+                .lock()
+                .await
+                .get(&request.voice)
+                .unwrap_or(&state.lm.default_voice)
+                .clone(),
+        ),
+    };
 
     let state = state.clone();
-    let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+    let num_codebooks = state.lm.config.num_codebooks;
     let chunks = preprocess_text(&request.input);
     let prompts = encode_chunks(
-        &state.tokenizer,
+        &state.lm.tokenizer,
         chunks,
         &state.device,
-        Some(&voice_embedding),
+        voice_embedding,
+        request.speaker_prompt,
         num_codebooks,
-        state.model_type,
+        state.lm.model_type,
+        // KV cache kept between requests for single batch only
+        request.batch_size.is_none(),
     )?;
 
     if request.response_format == Some("opus".into()) {
         generate_speech_streaming(state, prompts).await
     } else {
-        generate_speech_blocking(state, prompts).await
+        generate_speech_blocking(state, prompts, request.batch_size).await
     }
 }

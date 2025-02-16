@@ -4,8 +4,8 @@ use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
-use fish_speech_core::models::vqgan::config::{FireflyConfig, WhichModel};
-use fish_speech_core::models::vqgan::encoder::FireflyEncoder;
+use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
+use fish_speech_core::models::vqgan::{config::FireflyConfig, encoder::FireflyEncoder};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -42,13 +42,24 @@ fn main() -> Result<()> {
     #[cfg(not(any(feature = "metal", feature = "cuda")))]
     let device = Device::Cpu;
 
+    let encoder_version = WhichCodec::from_model(args.fish_version.clone());
+    let fish_version = match encoder_version {
+        WhichCodec::Mimi => anyhow::bail!("Only official Fish HiFiGAN supported"),
+        WhichCodec::Fish(v) => v,
+    };
     // CPU preprocessing for now
     let (mut audio, sr) = torchaudio::load(args.src_audio, &Device::Cpu)?;
     if audio.dim(0)? > 1 {
         audio = audio.mean_keepdim(0)?;
     }
 
-    let config = FireflyConfig::get_config_for(args.fish_version);
+    let dtype = DType::F32;
+    let model_path = match fish_version {
+        WhichFishVersion::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator.pth",
+        _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
+    };
+
+    let config = FireflyConfig::get_config_for(fish_version.clone());
     // Add spurious batch dimension for consistency
     audio = torchaudio::functional::resample(&audio, sr, config.spec_transform.sample_rate as u32)?
         .unsqueeze(0)?;
@@ -60,15 +71,9 @@ fn main() -> Result<()> {
     let mels = spec_transform.forward(&audio)?.to_device(&device)?;
     println!("Audio preprocessing complete");
 
-    let dtype = DType::F32;
-    let model_path = match args.fish_version {
-        WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator.pth",
-        _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
-    };
-
     println!("Using device {:?}", device);
-    let vb = match args.fish_version {
-        WhichModel::Fish1_2 => {
+    let vb = match fish_version {
+        WhichFishVersion::Fish1_2 => {
             VarBuilder::from_pth(args.checkpoint.join(model_path), dtype, &device)?
         }
         _ => unsafe {
@@ -79,7 +84,10 @@ fn main() -> Result<()> {
             )?
         },
     };
-    let encoder = FireflyEncoder::load(vb, &config, &args.fish_version)?;
+    let encoder = match encoder_version {
+        WhichCodec::Fish(v) => FireflyEncoder::load(vb, &config, &v)?,
+        _ => anyhow::bail!("CLI supports Fish HiFiGAN encoders only; please use server"),
+    };
     println!("Model {:?} loaded", args.fish_version);
 
     let start_decode = Instant::now();

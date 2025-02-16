@@ -12,7 +12,7 @@ cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
     "candle-transformers/cuda",
-    "dep:candle-gqa-ops",
+    "dep:candle-gqa-kernels",
 ]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
@@ -22,20 +22,21 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 anyhow = "1.0.86"
 approx = "0.5.1"
 byteorder = "1.5.0"
-candle-core = "0.7.2"
-candle-flash-attn = { version = "0.7.2", optional = true }
-candle-gqa-ops = { git = "https://github.com/EndlessReform/candle-gqa-kernels.git", branch = "master", optional = true }
-candle-nn = "0.7.2"
-candle-transformers = "0.7.2"
+candle-core = "0.8.3"
+candle-flash-attn = { version = "0.8.3", optional = true }
+candle-nn = "0.8.3"
+candle-transformers = "0.8.3"
 clap = { version = "4.5.16", features = ["derive"] }
 hf-hub = "0.3.2"
 indicatif = "0.17.8"
 num = "0.4.3"
 num-traits = "0.2.19"
 rand = "0.8.5"
+rayon = "1.10.0"
 regex = "1.10.6"
 rustfft = "6.2.0"
 serde = { version = "1.0.208", features = ["derive"] }
+candle-gqa-kernels = { path = "../candle-gqa-kernels", optional = true }
 serde_json = "1.0.127"
 symphonia = "0.5.4"
 thiserror = "1.0.63"

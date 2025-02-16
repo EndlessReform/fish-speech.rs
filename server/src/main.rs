@@ -3,60 +3,19 @@ use axum::{
     routing::{get, post},
     Router,
 };
+pub use bytes::Bytes;
 use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
 use clap::Parser;
-use fish_speech_core::{
-    audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
-    models::{
-        text2semantic::{BaseModelArgs, DualARTransformer},
-        vqgan::{
-            config::{FireflyConfig, WhichModel},
-            decoder::FireflyDecoder,
-            encoder::FireflyEncoder,
-        },
-    },
-};
+pub use futures_util::Stream;
 use server::handlers::{
     encode_speech::encode_speaker, speech::generate_speech, supported_voices::get_supported_voices,
 };
-use server::load_speaker_prompts;
 use server::state::AppState;
-use std::path::PathBuf;
+use server::utils::load::{load_codec, load_lm, Args};
 use std::sync::Arc;
 use std::time::Instant;
-use tokenizers::Tokenizer;
-use tokio::sync::Mutex;
 // Re-export the key types
-pub use bytes::Bytes;
-pub use futures_util::Stream;
 use tower_http::cors::{Any, CorsLayer};
-
-#[derive(Parser)]
-struct Args {
-    /// Checkpoint file path (default: "checkpoints/fish-1.5", canonicalized)
-    #[arg(long, default_value = "checkpoints/fish-speech-1.5")]
-    checkpoint: PathBuf,
-
-    #[arg(short, long, default_value = "1.5")]
-    fish_version: WhichModel,
-
-    /// Directory containing voice embeddings
-    #[arg(long, default_value = "voices")]
-    voice_dir: PathBuf,
-
-    /// Port to listen on
-    #[arg(short, long, default_value = "3000")]
-    port: u16,
-
-    /// Temperature for sampling (higher = more random)
-    #[arg(long, default_value = "0.7")]
-    temp: f64,
-
-    /// Top-p (nucleus) sampling threshold
-    #[arg(long, default_value = "0.8")]
-    top_p: f64,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -72,8 +31,6 @@ async fn main() -> anyhow::Result<()> {
     let device = Device::Cpu;
 
     let checkpoint_dir = args.checkpoint.canonicalize().unwrap();
-    let semantic_config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
-    let tokenizer = Arc::new(Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap());
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]
     let dtype = DType::BF16;
@@ -82,113 +39,18 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
-    let vb_lm = match args.fish_version {
-        WhichModel::Fish1_2 => {
-            VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
-        }
-        _ => unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[checkpoint_dir.join("model.safetensors")],
-                dtype,
-                &device,
-            )?
-        },
-    };
-    let vb_firefly = match args.fish_version {
-        WhichModel::Fish1_2 => VarBuilder::from_pth(
-            args.checkpoint
-                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            dtype,
-            &device,
-        )?,
-        _ => unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[args
-                    .checkpoint
-                    .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
-                dtype,
-                &device,
-            )?
-        },
-    };
-    let vb_encoder = match args.fish_version {
-        WhichModel::Fish1_2 => VarBuilder::from_pth(
-            args.checkpoint
-                .join("firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth"),
-            DType::F32,
-            &device,
-        )?,
-        _ => unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[args
-                    .checkpoint
-                    .join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
-                DType::F32,
-                &device,
-            )?
-        },
-    };
-    let firefly_config = match args.fish_version {
-        WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
-        _ => FireflyConfig::fish_speech_1_4(),
-    };
-
-    let semantic_start_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012),
-        _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
-    } as i64;
-    let semantic_end_id = match args.fish_version {
-        WhichModel::Fish1_5 => tokenizer
-            .token_to_id(&format!(
-                "<|semantic:{}|>",
-                semantic_config.codebook_size - 1
-            ))
-            .map(|id| id as i64),
-        _ => None,
-    };
-    let semantic_model = Arc::new(Mutex::new(DualARTransformer::load(
-        &vb_lm,
-        &semantic_config,
-        semantic_start_id,
-        semantic_end_id,
-    )?));
-    let vocoder_model = Arc::new(FireflyDecoder::load(
-        &vb_firefly,
-        &firefly_config,
-        &args.fish_version,
-    )?);
-    let encoder_model = Arc::new(FireflyEncoder::load(
-        vb_encoder.clone(),
-        &firefly_config,
-        &args.fish_version,
-    )?);
+    let lm_state = load_lm(&args, checkpoint_dir, dtype, &device)?;
+    let (codec_state, sample_rate) =
+        load_codec(&args, dtype, &device, lm_state.config.num_codebooks)?;
     let dt = start_load.elapsed();
-    let spec_transform = Arc::new(LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?);
     println!("Models loaded in {:.2}s", dt.as_secs_f64());
-    // Load all voices into memory
-    let (speakers, default_speaker) = load_speaker_prompts(
-        &args.voice_dir,
-        &tokenizer,
-        &device,
-        semantic_config.num_codebooks,
-        args.fish_version.clone(),
-    )?;
-    println!("Loaded {} voices", speakers.len());
 
     let state = Arc::new(AppState {
-        semantic_model,
-        vocoder_model,
-        encoder_model,
-        semantic_config: Arc::new(semantic_config),
-        firefly_config: Arc::new(firefly_config),
-        spec_transform,
-        tokenizer,
+        lm: Arc::new(lm_state),
+        codec: Arc::new(codec_state),
         device,
-        voices: Arc::new(Mutex::new(speakers)),
-        default_voice: Arc::new(default_speaker),
-        temp: args.temp,
-        top_p: args.top_p,
         model_type: args.fish_version,
+        sample_rate,
     });
 
     // Create router

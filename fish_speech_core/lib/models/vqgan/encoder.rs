@@ -1,17 +1,23 @@
-use super::config::{FireflyConfig, WhichModel};
+use super::config::FireflyConfig;
 use super::convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
 use super::quantizer::DownsampleFiniteScalarQuantizer;
+use crate::config::WhichFishVersion;
 use anyhow::Result as AnyhowResult;
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
 pub struct FireflyEncoder {
     backbone: ConvNeXtEncoder,
     quantizer: DownsampleFiniteScalarQuantizer,
+    dtype: DType,
 }
 
 impl FireflyEncoder {
-    pub fn load(vb: VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> AnyhowResult<Self> {
+    pub fn load(
+        vb: VarBuilder,
+        cfg: &FireflyConfig,
+        model: &WhichFishVersion,
+    ) -> AnyhowResult<Self> {
         // TODO: This will have to be fixed w/ rest of config
         let backbone = ConvNeXtEncoder::load(
             vb.pp("backbone"),
@@ -29,14 +35,14 @@ impl FireflyEncoder {
         Ok(Self {
             backbone,
             quantizer,
+            dtype: vb.dtype(),
         })
     }
 
     /// Unlike upstream implementation, requires MEL binning beforehand
     pub fn encode(&self, mel: &Tensor) -> Result<Tensor> {
-        // mel.write_npy("spec_transform.npy")?;
+        let mel = mel.to_dtype(self.dtype)?;
         let encoded_features = self.backbone.forward(&mel)?;
-        // encoded_features.write_npy("backbone.npy")?;
         self.quantizer.encode(&encoded_features)
     }
 }

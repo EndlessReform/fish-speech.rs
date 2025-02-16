@@ -1,0 +1,16 @@
+[package]
+name = "candle-gqa-kernels"
+edition = "2021"
+version.workspace = true
+
+description = "CUDA kernels for GQA Candle models"
+repository = "https://github.com/EndlessReform/candle-gqa"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT"
+
+
+[dependencies]
+
+[build-dependencies]
+bindgen_cuda = "0.1.5"

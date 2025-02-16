@@ -1,6 +1,7 @@
 // Original convnext implementation: https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/convnext.rs
 // convnext implementation from fish speech: https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/vqgan/modules/firefly.py
-use super::{config::WhichModel, utils::FishConvNet};
+use super::utils::FishConvNet;
+use crate::config::WhichFishVersion;
 use candle_core::{Error, Result, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Linear, Module, VarBuilder};
 
@@ -50,7 +51,7 @@ impl ConvNeXtBlock {
     pub fn load(
         vb: VarBuilder,
         config: &ConvNeXtBlockConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<ConvNeXtBlock> {
         let dwconv = FishConvNet::load(
             vb.pp("dwconv"),
@@ -59,7 +60,7 @@ impl ConvNeXtBlock {
             config.kernel_size,
             Conv1dConfig {
                 padding: match model {
-                    WhichModel::Fish1_2 => {
+                    WhichFishVersion::Fish1_2 => {
                         (config.dilation as f64 * (config.kernel_size as f64 - 1.0) / 2.0).round()
                             as usize
                     }
@@ -186,7 +187,7 @@ impl StemLayer {
     pub fn load(
         vb: VarBuilder,
         config: &ConvNeXtEncoderConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<Self> {
         let vb_ds = vb.pp("downsample_layers");
         let conv = FishConvNet::load(
@@ -196,7 +197,7 @@ impl StemLayer {
             config.kernel_size,
             Conv1dConfig {
                 padding: match model {
-                    WhichModel::Fish1_2 => config.kernel_size / 2,
+                    WhichFishVersion::Fish1_2 => config.kernel_size / 2,
                     _ => 0,
                 },
                 ..Default::default()
@@ -242,7 +243,7 @@ impl MidLayer {
     pub fn load(
         vb: VarBuilder,
         config: &ConvNeXtEncoderConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
         idx: usize,
     ) -> Result<Self> {
         let vb_stem = vb.pp(format!("downsample_layers.{}", idx));
@@ -293,7 +294,7 @@ impl ConvNeXtEncoder {
     pub fn load(
         vb: VarBuilder,
         config: &ConvNeXtEncoderConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<ConvNeXtEncoder> {
         if config.depths.len() != config.dims.len() {
             return Err(Error::debug(format!(

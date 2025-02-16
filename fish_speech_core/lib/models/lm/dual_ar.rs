@@ -1,8 +1,7 @@
-pub mod utils;
-
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 #[cfg(feature = "cuda")]
-use candle_gqa_ops::ops::repeat_kv;
+use super::ops::repeat_kv::repeat_kv;
+use anyhow;
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
@@ -11,6 +10,48 @@ use serde_json;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use tokenizers::Tokenizer;
+
+use crate::config::{WhichFishVersion, WhichLM};
+
+#[derive(Debug, Clone)]
+pub struct TokenConfig {
+    pub im_end_id: u32,
+    pub pad_id: u32,
+    pub semantic_start_id: u32,
+    pub semantic_end_id: Option<u32>,
+}
+
+impl TokenConfig {
+    pub fn new(
+        model: WhichLM,
+        tokenizer: &Tokenizer,
+        config: &BaseModelArgs,
+    ) -> anyhow::Result<Self> {
+        let im_end_id = tokenizer
+            .token_to_id("<|im_end|>")
+            .ok_or(anyhow::anyhow!("Tokenizer does not have <|im_end|>"))?;
+        let semantic_start_id = match model {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                tokenizer.token_to_id("<|semantic:0|>").unwrap_or(100012)
+            }
+            _ => tokenizer.token_to_id("<|semantic|>").unwrap_or(5),
+        };
+        let semantic_end_id = match model {
+            WhichLM::DualAR | WhichLM::Fish(WhichFishVersion::Fish1_5) => {
+                tokenizer.token_to_id(&format!("<|semantic:{}|>", config.codebook_size - 1))
+            }
+            _ => None,
+        };
+        let pad_id = tokenizer.token_to_id("<|semantic|>").unwrap_or(5);
+        Ok(Self {
+            im_end_id,
+            pad_id,
+            semantic_start_id,
+            semantic_end_id,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
@@ -33,6 +74,10 @@ pub struct BaseModelArgs {
     pub tie_word_embeddings: bool,
     pub use_gradient_checkpointing: bool,
     pub vocab_size: usize,
+    #[serde(default)]
+    pub depthwise_wte: Option<bool>,
+    #[serde(default)]
+    pub depthwise_output: Option<bool>,
 }
 
 impl BaseModelArgs {
@@ -57,6 +102,8 @@ impl BaseModelArgs {
             codebook_size: 1024,
             num_codebooks: 4,
             use_gradient_checkpointing: true,
+            depthwise_wte: Some(false),
+            depthwise_output: Some(false),
         }
     }
 
@@ -175,7 +222,6 @@ impl Attention {
         let wqkv = Linear::new(vb.get((total_head_dim, config.dim), "wqkv.weight")?, None);
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
-        // let cache = KvCache::new(2, if is_fast { config.num_codebooks } else { 1024 });
         let kv_cache = None;
 
         Ok(Self {
@@ -215,11 +261,17 @@ impl Attention {
         // Masking w/ KV cache is redundant
         let attn_weight = match attn_mask {
             None => attn_weight,
-            Some(attn_mask) => masked_fill(
-                &attn_weight,
-                &attn_mask.broadcast_left((1, self.n_head))?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(attn_mask) => {
+                let repeated_mask = match attn_mask.rank() {
+                    2 => attn_mask.broadcast_left((1, self.n_head))?,
+                    4 => {
+                        let (bsz, _, x, y) = attn_mask.dims4()?;
+                        attn_mask.expand((bsz, self.n_head, x, y))?
+                    }
+                    n => candle_core::bail!("Expected mask rank 2 or 4 but got {}", n),
+                };
+                masked_fill(&attn_weight, &repeated_mask, f32::NEG_INFINITY)?
+            }
         };
         let attn_weight = softmax_last_dim(&attn_weight)?;
         // Ignoring dropout until we implement training
@@ -280,8 +332,15 @@ impl Attention {
             .unsqueeze(2)?
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
+        // TODO: Fix op to handle bsz > 1
         #[cfg(feature = "cuda")]
-        let key_states = repeat_kv(&key_states, n_rep)?;
+        let key_states = match bsz {
+            1 => repeat_kv(&key_states, n_rep)?,
+            _ => key_states
+                .unsqueeze(2)?
+                .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+                .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?,
+        };
 
         #[cfg(not(feature = "cuda"))]
         let value_states = value_states
@@ -289,7 +348,13 @@ impl Attention {
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
         #[cfg(feature = "cuda")]
-        let value_states = repeat_kv(&value_states, n_rep)?;
+        let value_states = match bsz {
+            1 => repeat_kv(&value_states, n_rep)?,
+            _ => value_states
+                .unsqueeze(2)?
+                .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
+                .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?,
+        };
 
         let scale_factor = 1f32 / (self.head_dim as f32).sqrt();
         let mask = if seqlen > 1 { Some(mask) } else { None };
@@ -387,16 +452,16 @@ pub struct DualARTransformer {
     fast_norm: RmsNorm,
     freqs_cis: (Tensor, Tensor),
     pub cfg: BaseModelArgs,
-    semantic_start_id: i64,
-    semantic_end_id: Option<i64>,
+    pub token_config: TokenConfig,
+    pub model_type: WhichLM,
 }
 
 impl DualARTransformer {
     pub fn load(
         vb: &VarBuilder,
         cfg: &BaseModelArgs,
-        semantic_start_id: i64,
-        semantic_end_id: Option<i64>,
+        token_config: &TokenConfig,
+        model_type: WhichLM,
     ) -> Result<Self> {
         let embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("embeddings"))?;
         let codebook_embeddings = Embedding::new(
@@ -411,9 +476,24 @@ impl DualARTransformer {
             .collect();
         let layers = layers?;
         let norm = RmsNorm::new(vb.get(cfg.dim, "norm.weight")?, cfg.norm_eps);
-        let output = Linear::new(vb.get((cfg.vocab_size, cfg.dim), "output.weight")?, None);
+        let output = Linear::new(
+            vb.get(
+                (cfg.vocab_size, cfg.dim),
+                if cfg.tie_word_embeddings {
+                    "embeddings.weight"
+                } else {
+                    "output.weight"
+                },
+            )?
+            .contiguous()?,
+            None,
+        );
+        let fast_emb_dim = match cfg.depthwise_wte {
+            Some(true) => (cfg.num_codebooks - 1) * cfg.codebook_size,
+            _ => cfg.codebook_size,
+        };
         let fast_embeddings = Embedding::new(
-            vb.get((cfg.codebook_size, cfg.dim), "fast_embeddings.weight")?,
+            vb.get((fast_emb_dim, cfg.dim), "fast_embeddings.weight")?,
             cfg.dim,
         );
         let fast_layers: Result<Vec<TransformerBlock>> = (0..cfg.n_fast_layer)
@@ -421,8 +501,12 @@ impl DualARTransformer {
             .collect();
         let fast_layers = fast_layers?;
         let fast_norm = RmsNorm::new(vb.get(cfg.dim, "fast_norm.weight")?, cfg.norm_eps);
+        let fast_output_size = match cfg.depthwise_output {
+            Some(true) => cfg.codebook_size * cfg.num_codebooks,
+            _ => cfg.codebook_size,
+        };
         let fast_output = Linear::new(
-            vb.get((cfg.dim, cfg.codebook_size), "fast_output.weight")?,
+            vb.get((fast_output_size, cfg.dim), "fast_output.weight")?,
             None,
         );
         let freqs_cis = precompute_freqs_cis(cfg, vb.device(), vb.dtype())?;
@@ -439,24 +523,21 @@ impl DualARTransformer {
             norm,
             cfg: cfg.clone(),
             freqs_cis,
-            semantic_start_id,
-            semantic_end_id,
+            token_config: token_config.clone(),
+            model_type,
         })
     }
 
+    /// Assumes (bsz, n_codes + 1, seqlen)
     fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        let semantic_tokens = x.i((0, ..))?;
-        let codebook_tokens = x.i((1.., ..))?;
+        let semantic_tokens = x.i((.., 0, ..))?;
+        let codebook_tokens = x.i((.., 1.., ..))?;
         assert!(
             x.dim(D::Minus2)? == self.cfg.num_codebooks + 1,
             "Input tokens must have num_codebooks + 1 codebooks!"
         );
-        // Embed semantic tokens, re-add batch dim if single-batched
-        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?;
-        let semantic_embeds = match semantic_embeds.rank() {
-            2 => semantic_embeds.unsqueeze(0)?,
-            _ => semantic_embeds,
-        };
+        // Embed semantic tokens, re-add codebook dim
+        let semantic_embeds = self.embeddings.forward(&semantic_tokens)?.unsqueeze(1)?;
 
         // Offset the ranges for each codebook so they don't overlap
         let codebook_tokens_shifted = codebook_tokens.broadcast_add(
@@ -469,28 +550,68 @@ impl DualARTransformer {
             .unsqueeze(1)?,
         )?;
         let codebook_emb = self.codebook_embeddings.forward(&codebook_tokens_shifted)?;
-        let emb_mask = match self.semantic_end_id {
+        // Keep codes under PAD if Fish 1.4, <|semantic:start_id|> to <|semantic:end_id|> if 1.5+
+        let emb_mask = match self.token_config.semantic_end_id {
             Some(end_id) => semantic_tokens
                 .le(end_id)?
-                .mul(&semantic_tokens.ge(self.semantic_start_id)?),
-            None => semantic_tokens.eq(self.semantic_start_id),
+                .mul(&semantic_tokens.ge(self.token_config.semantic_start_id)?),
+            None => semantic_tokens.eq(self.token_config.semantic_start_id),
         }?
         .unsqueeze(D::Minus1)?
         .to_dtype(codebook_emb.dtype())?;
-        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask)?;
-        let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 0)?;
-        x.sum_keepdim(0)
+        // (bsz, codes, seqlen, emb_dim) * (bsz, codes, seqlen, mask)
+        let codebook_embeds = codebook_emb.broadcast_mul(&emb_mask.unsqueeze(D::Minus(3))?)?;
+        let x = Tensor::cat(&[semantic_embeds, codebook_embeds], 1)?;
+        // Sum on code dimension
+        x.sum(1)
     }
 
+    /// **Padding mask:**
+    /// Optional 2D (bsz, seqlen) showing which positions need to be masked out for ragged batches.
+    /// 0 is MASK (for PAD token), 1 is KEEP.
+    ///
     /// Returns (logits, hidden_states)
-    pub fn forward_generate(&mut self, inp: &Tensor, input_pos: usize) -> Result<(Tensor, Tensor)> {
-        let seq_len = inp.dim(1)?;
+    pub fn forward_generate(
+        &mut self,
+        inp: &Tensor,
+        input_pos: usize,
+        pad_mask: Option<Tensor>,
+    ) -> Result<(Tensor, Tensor)> {
+        // println!("{:?}", inp.to_device(&Device::Cpu)?.to_vec3::<u32>());
         let mut x = self.embed(inp)?;
+        // println!("Embedded");
+        let (bsz, seq_len, _) = x.dims3()?;
 
-        // TODO: See if making masks on-the-fly is a performance bottleneck
         let mask = match seq_len {
-            1 => &self.get_mask_abs(1, 1, x.device())?,
-            _ => &self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
+            1 => self.get_mask_abs(1, 1, x.device())?,
+            _ => self.get_mask_abs(seq_len, self.curr_kv_size()? + seq_len, x.device())?,
+        };
+        let mask = match pad_mask {
+            Some(_) => {
+                // Yes, this commented code is terrible. This does not work and I cannot figure out why.
+                // I will come back to this later.
+                //
+                // Unlike in Torch, 0 is keep, 1 is MASK.
+                // We GET 0: mask 1: keep, so flip it
+                // Yes, this is terrible. Candle.rs has no booleans so this is what we got
+                // println!(
+                //     "Inverted padding mask: {:?}",
+                //     key_padding_mask.to_device(&Device::Cpu)?.to_vec2::<u8>()?
+                // );
+                // let inverted_padding =
+                //     Tensor::ones_like(&key_padding_mask)?.sub(&key_padding_mask)?;
+                // // let inverted_padding = key_padding_mask;
+                // println!(
+                //     "Inverted padding mask: {:?}",
+                //     inverted_padding.to_device(&Device::Cpu)?.to_vec2::<u8>()?
+                // );
+                // let mask = mask.reshape((1, 1, seq_len, seq_len))?;
+                // // Logical AND
+                // // 0, 0 (keep, keep) -> keep, otherwise 1 (mask)
+                // mask.broadcast_maximum(&inverted_padding.reshape((bsz, 1, 1, seq_len))?)?
+                mask.expand((bsz, 1, seq_len, seq_len))?
+            }
+            None => mask,
         };
 
         let (cos_full, sin_full) = &self.freqs_cis;
@@ -516,7 +637,7 @@ impl DualARTransformer {
     /// Returns codebook_logits only
     pub fn forward_generate_fast(&mut self, x: &Tensor, input_pos: usize) -> Result<Tensor> {
         let (bsz, seq_len, _) = x.dims3()?;
-        // This is a dirty hack but it will work for now
+        // With KV cache, seqlen for fast layers will only ever be 1 so this is fine
         let fast_mask = Tensor::from_vec(
             vec![u8::from(false); input_pos + 1],
             input_pos + 1,
@@ -524,7 +645,8 @@ impl DualARTransformer {
         )?
         .unsqueeze(0)?
         .repeat(bsz)?;
-        let x = x.reshape((1, 1, ()));
+        // Yes, this is dumb, but we need to start the iterator chain
+        let x: Result<Tensor> = Ok(x.clone());
 
         let (cos_full, sin_full) = &self.freqs_cis;
         let freqs_cis = (
@@ -536,7 +658,18 @@ impl DualARTransformer {
         })?;
 
         let fast_out = self.fast_norm.forward(&x)?;
-        self.fast_output.forward(&fast_out)
+        let logits = match self.cfg.depthwise_output {
+            Some(true) => {
+                let weights = self.fast_output.weight();
+                let slice = weights.i((
+                    input_pos * self.cfg.codebook_size..(input_pos + 1) * self.cfg.codebook_size,
+                    ..,
+                ))?;
+                fast_out.broadcast_matmul(&slice.transpose(0, 1)?)
+            }
+            _ => self.fast_output.forward(&fast_out),
+        };
+        logits
     }
 
     pub fn clear_fast_layer_caches(&mut self) {

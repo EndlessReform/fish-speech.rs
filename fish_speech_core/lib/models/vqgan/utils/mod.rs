@@ -1,4 +1,4 @@
-use super::config::WhichModel;
+use crate::config::WhichFishVersion;
 use candle_core::{IndexOp, Result, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Module, VarBuilder};
 
@@ -7,7 +7,7 @@ pub struct FishConvNet {
     conv: Conv1d,
     kernel_size_adj: usize,
     stride: usize,
-    model: WhichModel,
+    model: WhichFishVersion,
 }
 
 impl FishConvNet {
@@ -20,20 +20,20 @@ impl FishConvNet {
         out_channels: usize,
         kernel_size: usize,
         config: Conv1dConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<Self> {
         let conv = Conv1d::new(
             vb.get(
                 (out_channels, in_channels, kernel_size),
                 match model {
-                    WhichModel::Fish1_2 => "weight",
+                    WhichFishVersion::Fish1_2 => "weight",
                     _ => "conv.weight",
                 },
             )?,
             Some(vb.get(
                 out_channels,
                 match model {
-                    WhichModel::Fish1_2 => "bias",
+                    WhichFishVersion::Fish1_2 => "bias",
                     _ => "conv.bias",
                 },
             )?),
@@ -55,7 +55,7 @@ impl Module for FishConvNet {
         let pad = self.kernel_size_adj - self.stride;
 
         let x = match self.model {
-            WhichModel::Fish1_2 => xs,
+            WhichFishVersion::Fish1_2 => xs,
             _ => &xs.pad_with_zeros(D::Minus1, pad, 0)?,
         };
         self.conv.forward(x)?.contiguous()
@@ -66,7 +66,7 @@ pub struct FishTransConvNet {
     conv: ConvTranspose1d,
     stride: usize,
     kernel_size: usize,
-    model: WhichModel,
+    model: WhichFishVersion,
 }
 
 impl FishTransConvNet {
@@ -76,20 +76,20 @@ impl FishTransConvNet {
         out_channels: usize,
         kernel_size: usize,
         config: ConvTranspose1dConfig,
-        model: &WhichModel,
+        model: &WhichFishVersion,
     ) -> Result<Self> {
         let conv = ConvTranspose1d::new(
             vb.get(
                 (in_channels, out_channels, kernel_size),
                 match model {
-                    WhichModel::Fish1_2 => "weight",
+                    WhichFishVersion::Fish1_2 => "weight",
                     _ => "conv.weight",
                 },
             )?,
             Some(vb.get(
                 out_channels,
                 match model {
-                    WhichModel::Fish1_2 => "bias",
+                    WhichFishVersion::Fish1_2 => "bias",
                     _ => "conv.bias",
                 },
             )?),
@@ -114,7 +114,7 @@ impl Module for FishTransConvNet {
         let padding_right = pad;
         let padding_left = pad - padding_right;
         let x = match self.model {
-            WhichModel::Fish1_2 => x,
+            WhichFishVersion::Fish1_2 => x,
             _ => x.i((.., .., padding_left..x.dim(D::Minus1)? - padding_right))?,
         };
         let x = x.contiguous()?;

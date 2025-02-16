@@ -1,9 +1,10 @@
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 
-use super::config::{FireflyConfig, WhichModel};
+use super::config::FireflyConfig;
 use super::hifi_gan::HiFiGAN;
 use super::quantizer::DownsampleFiniteScalarQuantizer;
+use crate::config::WhichFishVersion;
 
 fn sequence_mask(lengths: &Tensor, max_length: Option<u32>, device: &Device) -> Result<Tensor> {
     // If lengths is empty, we have bigger problems
@@ -16,10 +17,11 @@ pub struct FireflyDecoder {
     quantizer: DownsampleFiniteScalarQuantizer,
     head: HiFiGAN,
     cfg: FireflyConfig,
+    pub device: Device,
 }
 
 impl FireflyDecoder {
-    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichModel) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichFishVersion) -> Result<Self> {
         let quantizer =
             DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
         let head = HiFiGAN::load(vb.pp("head"), &cfg.head, model)?;
@@ -28,6 +30,7 @@ impl FireflyDecoder {
             quantizer,
             head,
             cfg: cfg.clone(),
+            device: vb.device().clone(),
         })
     }
 

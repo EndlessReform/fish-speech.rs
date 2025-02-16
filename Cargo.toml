@@ -1,6 +1,12 @@
 [workspace]
-members = ["fish_speech_core", "fish_speech_python", "server"]
+members = [
+    "candle-gqa-kernels",
+    "fish_speech_core",
+    "fish_speech_python",
+    "server",
+]
 resolver = "2"
+package.version = "0.1.0"
 
 [profile.release-with-debug]
 inherits = "release"

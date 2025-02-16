@@ -1,4 +1,4 @@
-use clap;
+use crate::config::WhichFishVersion;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,23 +193,11 @@ impl FireflyConfig {
         }
     }
 
-    pub fn get_config_for(model: WhichModel) -> Self {
+    pub fn get_config_for(model: WhichFishVersion) -> Self {
         match model {
-            WhichModel::Fish1_2 => Self::fish_speech_1_2(),
-            WhichModel::Fish1_4 => Self::fish_speech_1_4(),
-            WhichModel::Fish1_5 => Self::fish_speech_1_4(),
+            WhichFishVersion::Fish1_2 => Self::fish_speech_1_2(),
+            WhichFishVersion::Fish1_4 => Self::fish_speech_1_4(),
+            WhichFishVersion::Fish1_5 => Self::fish_speech_1_4(),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
-pub enum WhichModel {
-    #[value(name = "1.2")]
-    Fish1_2,
-
-    #[value(name = "1.4")]
-    Fish1_4,
-
-    #[value(name = "1.5")]
-    Fish1_5,
 }

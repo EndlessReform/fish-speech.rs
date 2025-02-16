@@ -5,9 +5,7 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
-use fish_speech_core::models::text2semantic::utils::{
-    encode::encode_chunks, sample::SamplingArgs, text::preprocess_text,
-};
+use fish_speech_core::models::lm::utils::{encode::encode_chunks, text::preprocess_text};
 use serde::Deserialize;
 use std::io::{Cursor, Write};
 use std::sync::Arc;
@@ -25,45 +23,42 @@ pub async fn generate_hidden_states(
     Json(request): Json<GenerateHiddenStatesRequest>,
 ) -> Result<Response<Body>, AppError> {
     let voice_embedding = state
+        .lm
         .voices
         .lock()
         .await
         .get(&request.speaker_id)
-        .unwrap_or(&state.default_voice)
+        .unwrap_or(&state.lm.default_voice)
         .clone();
 
     let state = state.clone();
-    let num_codebooks = state.semantic_model.lock().await.cfg.num_codebooks;
+    let num_codebooks = state.lm.model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.text);
     let prompts = encode_chunks(
-        &state.tokenizer,
+        &state.lm.tokenizer,
         chunks,
         &state.device,
-        Some(&voice_embedding),
+        Some(voice_embedding),
+        None,
         num_codebooks,
-        state.model_type,
+        state.lm.model_type,
+        true,
     )?;
 
     let mut all_hidden_states = Vec::new();
     let mut all_pcm: Vec<f32> = Vec::new();
 
     // Non-streaming path stays relatively simple
-    let sampling_args = SamplingArgs {
-        temp: state.temp,
-        top_p: state.top_p,
-        top_k: 256,
-        repetition_penalty: 1.2,
-    };
     for prompt in prompts.chunks.iter() {
         let (semantic_tokens, maybe_hidden) = server_lm_generate_blocking(
-            &state,
+            state.clone(),
             prompt,
-            &sampling_args,
+            &state.lm.default_sampling_args,
             prompts.n_conditioning_tokens,
             true,
         )
         .await?;
-        let pcm = vocode_semantic_tokens(&state, &semantic_tokens).await?;
+        let pcm = vocode_semantic_tokens(state.clone(), &semantic_tokens).await?;
         if let Some(hidden) = maybe_hidden {
             // println!("{:?} maybe?", hidden.squeeze(1)?.shape());
             all_hidden_states.push(hidden.squeeze(1)?);
@@ -73,7 +68,7 @@ pub async fn generate_hidden_states(
         }
     }
 
-    let mut model = state.semantic_model.lock().await;
+    let mut model = state.lm.model.lock().await;
     // Final cache eviction
     model.clear_slow_layer_caches();
 
