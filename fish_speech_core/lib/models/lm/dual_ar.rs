@@ -1,7 +1,7 @@
+#[cfg(feature = "cuda")]
+use super::ops::repeat_kv::repeat_kv;
 use anyhow;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-#[cfg(feature = "cuda")]
-use candle_gqa_ops::ops::repeat_kv;
 use candle_nn::{
     embedding, ops::silu, ops::softmax_last_dim, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };

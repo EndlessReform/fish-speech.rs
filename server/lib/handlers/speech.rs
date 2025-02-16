@@ -105,7 +105,7 @@ pub async fn vocode_semantic_tokens(
         WhichLM::DualAR => semantic_tokens.i((.., ..seqlen - 1))?,
         _ => semantic_tokens.clone(),
     };
-    println!("Tokens shape: {:?},s eqlen: {}", tokens.shape(), seqlen);
+    // println!("Tokens shape: {:?},s eqlen: {}", tokens.shape(), seqlen);
 
     let out = state.codec.decode_batch(&tokens).await?;
     let duration = vocoder_start.elapsed();
@@ -154,7 +154,6 @@ async fn generate_speech_blocking(
             // Single batch
             for (i, prompt) in prompts.chunks.iter().enumerate() {
                 println!("Beginning chunk {} of {}", i, prompts.chunks.len());
-                println!("Prompt: {:?}", prompt.i((0, ..))?.to_vec1::<u32>()?);
                 let pcm = generate_pcm_chunk(state.clone(), prompt, prompts.n_conditioning_tokens)
                     .await?
                     .to_vec1::<f32>()?;

@@ -12,7 +12,6 @@ cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
     "candle-transformers/cuda",
-    "dep:candle-gqa-ops",
     "moshi/cuda",
 ]
 metal = [
@@ -32,17 +31,16 @@ async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["multipart"] }
 byteorder = "1.5.0"
 bytes = "1.8.0"
-candle-core = "0.7.2"
-candle-flash-attn = { version = "0.7.2", optional = true }
-candle-gqa-ops = { git = "https://github.com/EndlessReform/candle-gqa-kernels.git", branch = "master", optional = true }
-candle-nn = "0.7.2"
-candle-transformers = "0.7.2"
+candle-core = "0.8.3"
+candle-flash-attn = { version = "0.8.3", optional = true }
+candle-nn = "0.8.3"
+candle-transformers = "0.8.3"
 clap = { version = "4.5.16", features = ["derive"] }
 futures = "0.3.31"
 futures-util = "0.3.31"
 hf-hub = "0.4.1"
 indicatif = "0.17.8"
-moshi = { version = "0.2.4", optional = true }
+moshi = { version = "0.5.2", optional = true }
 num = "0.4.3"
 num-traits = "0.2.19"
 ogg = { version = "0.9.1", features = ["tokio-util", "async"] }
