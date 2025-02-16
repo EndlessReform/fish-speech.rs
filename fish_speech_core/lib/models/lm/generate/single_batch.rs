@@ -215,7 +215,7 @@ pub fn generate_blocking_with_hidden(
     // TODO: Handle text output
     let audio_only = true;
     let n_cached = model.curr_kv_size()?;
-
+    let im_end_id = model.token_config.im_end_id;
     let prompt_size = prompt.dim(D::Minus1)?;
     let mut generator =
         SingleBatchGenerator::new(model, prompt, max_new_tokens, sampling_args, audio_only)?;
@@ -249,7 +249,9 @@ pub fn generate_blocking_with_hidden(
     let start_decode = Instant::now();
     for (i, maybe_vq_token) in generator.into_iter().enumerate() {
         let vq_token = maybe_vq_token?;
-        previous_tokens.push(vq_token.codes);
+        if vq_token.tokens[0] != im_end_id {
+            previous_tokens.push(vq_token.codes);
+        }
 
         if collect_hidden_states {
             hidden_states.push(vq_token.hidden_state);
