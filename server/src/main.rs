@@ -30,7 +30,11 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(any(feature = "cuda", feature = "metal")))]
     let device = Device::Cpu;
 
-    let checkpoint_dir = args.checkpoint.canonicalize().unwrap();
+    let checkpoint_dir = if let Some(raw_dir) = args.checkpoint.as_ref() {
+        Some(raw_dir.canonicalize().unwrap())
+    } else {
+        None
+    };
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]
     let dtype = DType::BF16;

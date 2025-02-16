@@ -32,34 +32,13 @@ git clone https://github.com/EndlessReform/fish-speech.rs.git
 cd fish-speech.rs
 ```
 
-Save the Fish Speech checkpoints to `./checkpoints`. I recommend using [`huggingface-cli`](https://huggingface.co/docs/huggingface_hub/main/en/guides/cli):
+Now compile from source:
 
 ```bash
-# If it's not already on system
-brew install huggingface-cli
-# For Windows or Linux (assumes working Python):
-# pip install -U "huggingface_hub[cli]"
-# or just skip this and download the folder manually
-
-mkdir -p checkpoints/fish-speech-1.5
-# NOTE: the official weights are not compatible
-huggingface-cli download jkeisling/fish-speech-1.5 --local-dir checkpoints/fish-speech-1.5
-```
-
-If you're using an older Fish version:
-- For Fish 1.4, please use [`jkeisling/fish-speech-1.4`](https://huggingface.co/jkeisling/fish-speech-1.4): the official weights are not compatible.
-- For Fish 1.2 SFT, feel free to use the [official weights](https://huggingface.co/fishaudio/fish-speech-1.2-sft).
-
-Now compile from source. For Apple Silicon GPU support:
-
-```bash
-cargo build --release --bin server --features metal
-```
-
-For Nvidia:
-
-```bash
+# Nvidia
 cargo build --release --bin server --features cuda
+# Apple Silicon
+cargo build --release --bin server --features metal
 ```
 
 For extra performance on Nvidia, you can enable [flash attention](https://github.com/Dao-AILab/flash-attention).
@@ -82,13 +61,15 @@ Just start the binary! If you're getting started for the first time, run:
 ./target/release/server --voice-dir voices-template
 ```
 
+This will start the server on port 3000, using the pretrained models.
+
 Options:
 - `--port`: Defaults to 3000
-- `--checkpoint`: Directory for checkpoint folder. Defaults to `checkpoints/fish-speech-1.5`.
 - `--voice-dir`: Directory for speaker prompts. (more on this below)
 - `--fish-version`: `1.5`, `1.4`, or `1.2`. Defaults to 1.5
 - `--temp`: Temperature for language model backbone. Default: 0.7
 - `--top_p`: Top-p sampling for language model backbone. Default 0.8, to turn off set it to 1.
+- `--checkpoint`: Optional directory for checkpoint folder, if using fine-tune with merged weights, or custom model.
 
 This server supports OGG audio (streaming) and WAV audio output.
 
@@ -113,7 +94,7 @@ audio.stream_to_file(temp_file)
 
 ### Temporary voice cloning
 
-To clone a voice, you'll need a WAV file and a transcription. Suppose you want to add speaker `alice`, who says "Hello world" in file `fake.wav`. 
+To clone a voice, you'll need a WAV file and a transcription. Suppose you want to add speaker `alice`, who says "Hello world" in file `fake.wav`.
 
 Make a POST request to the `/v1/audio/encoding` endpoint, with:
 - fake.wav as file body
