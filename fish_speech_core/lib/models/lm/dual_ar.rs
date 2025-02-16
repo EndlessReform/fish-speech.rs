@@ -658,7 +658,18 @@ impl DualARTransformer {
         })?;
 
         let fast_out = self.fast_norm.forward(&x)?;
-        self.fast_output.forward(&fast_out)
+        let logits = match self.cfg.depthwise_output {
+            Some(true) => {
+                let weights = self.fast_output.weight();
+                let slice = weights.i((
+                    input_pos * self.cfg.codebook_size..(input_pos + 1) * self.cfg.codebook_size,
+                    ..,
+                ))?;
+                fast_out.broadcast_matmul(&slice.transpose(0, 1)?)
+            }
+            _ => self.fast_output.forward(&fast_out),
+        };
+        logits
     }
 
     pub fn clear_fast_layer_caches(&mut self) {

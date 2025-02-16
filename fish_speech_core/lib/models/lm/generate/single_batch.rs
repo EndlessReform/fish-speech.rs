@@ -159,17 +159,17 @@ impl<'a> Iterator for SingleBatchGenerator<'a> {
                     .forward_generate_fast(&x, codebook_idx)?
                     .flatten_all()?;
 
-                let logits_adj = match (&self.previous_codes, self.model.cfg.depthwise_wte) {
-                    (None, _) => logits.clone(),
-                    // Turning off rep pen for smoltts for now
-                    (_, Some(true)) => logits.clone(),
-                    (Some(t), _) => self.rep_pen_processors[codebook_idx]
-                        .apply(&logits, t[codebook_idx + 1] as usize)?,
-                };
-                let a = self.logits_processor.sample(&logits_adj.flatten_all()?)?;
+                // let logits_adj = match (&self.previous_codes, self.model.cfg.depthwise_wte) {
+                //     (None, _) => logits.clone(),
+                //     // Turning off rep pen for smoltts for now
+                //     (_, Some(true)) => logits.clone(),
+                //     (Some(t), _) => self.rep_pen_processors[codebook_idx]
+                //         .apply(&logits, t[codebook_idx + 1] as usize)?,
+                // };
+                let a = self.logits_processor.sample(&logits.flatten_all()?)?;
                 let a_tensor = Tensor::from_slice(&[a], 1, x.device())?;
                 let a_tensor = if let Some(true) = self.model.cfg.depthwise_wte {
-                    (a_tensor + 0.max(codebook_idx * self.model.cfg.num_codebooks) as f64)?
+                    (a_tensor + 0.max(codebook_idx * self.model.cfg.codebook_size) as f64)?
                 } else {
                     a_tensor
                 };
