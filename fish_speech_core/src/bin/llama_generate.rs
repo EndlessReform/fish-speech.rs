@@ -3,10 +3,10 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::config::{WhichFishVersion, WhichLM, WhichModel};
-use fish_speech_core::models::lm::generate::generate_blocking;
-use fish_speech_core::models::lm::sampling::SamplingArgs;
-use fish_speech_core::models::lm::utils::encode::{load_prompt_text, PromptEncoder};
-use fish_speech_core::models::lm::{
+use fish_speech_core::lm::generate::generate_blocking;
+use fish_speech_core::lm::sampling::SamplingArgs;
+use fish_speech_core::lm::utils::encode::{load_prompt_text, PromptEncoder};
+use fish_speech_core::lm::{
     dual_ar::{BaseModelArgs, TokenConfig},
     DualARTransformer,
 };

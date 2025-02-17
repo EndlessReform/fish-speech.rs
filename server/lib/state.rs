@@ -1,9 +1,9 @@
 use super::audio::codec::Codec;
 use candle_core::{Device, Tensor};
 use fish_speech_core::config::{WhichLM, WhichModel};
-use fish_speech_core::models::lm::dual_ar::BaseModelArgs;
-use fish_speech_core::models::lm::sampling::SamplingArgs;
-use fish_speech_core::models::lm::DualARTransformer;
+use fish_speech_core::lm::dual_ar::BaseModelArgs;
+use fish_speech_core::lm::sampling::SamplingArgs;
+use fish_speech_core::lm::DualARTransformer;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokenizers::Tokenizer;

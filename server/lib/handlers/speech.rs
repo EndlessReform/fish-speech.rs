@@ -7,11 +7,9 @@ use bytes::Bytes;
 use candle_core::{IndexOp, Tensor, D};
 use fish_speech_core::audio::{functional::resample, wav::write_pcm_as_wav};
 use fish_speech_core::config::{WhichFishVersion, WhichLM};
-use fish_speech_core::models::lm::generate::{
-    generate_blocking_with_hidden, generate_static_batch,
-};
-use fish_speech_core::models::lm::sampling::SamplingArgs;
-use fish_speech_core::models::lm::utils::{
+use fish_speech_core::lm::generate::{generate_blocking_with_hidden, generate_static_batch};
+use fish_speech_core::lm::sampling::SamplingArgs;
+use fish_speech_core::lm::utils::{
     encode::{encode_chunks, EncodedChunks},
     text::preprocess_text,
 };

@@ -8,7 +8,7 @@ use clap::Parser;
 use fish_speech_core::codec::{FireflyCodec, FireflyConfig};
 use fish_speech_core::{
     config::{WhichCodec, WhichFishVersion, WhichLM, WhichModel},
-    models::lm::{
+    lm::{
         dual_ar::{BaseModelArgs, TokenConfig},
         sampling::SamplingArgs,
         DualARTransformer,
@@ -145,14 +145,14 @@ pub fn load_codec(
     num_codebooks: usize,
 ) -> anyhow::Result<(Codec, u32)> {
     let repo = get_model_repo(args.fish_version)?;
-    let weight_name = match args.fish_version {
-        WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth",
-        _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
-    };
 
     let codec_type = WhichCodec::from_model(args.fish_version.clone());
     match codec_type {
         WhichCodec::Fish(version) => {
+            let weight_name = match args.fish_version {
+                WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth",
+                _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
+            };
             let vb_path = match args.checkpoint.as_ref() {
                 Some(dir) => dir.join(weight_name),
                 None => repo.get(weight_name)?,

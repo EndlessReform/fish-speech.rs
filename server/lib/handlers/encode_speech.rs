@@ -9,7 +9,7 @@ use axum::{
 use candle_core::{Tensor, D};
 use fish_speech_core::audio as torchaudio;
 use fish_speech_core::audio::functional;
-use fish_speech_core::models::lm::utils::encode::PromptEncoder;
+use fish_speech_core::lm::utils::encode::PromptEncoder;
 use std::sync::Arc;
 use std::time::Instant;
 

@@ -1,9 +1,9 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
 use crate::config::{WhichFishVersion, WhichLM};
-use crate::models::lm::sampling::{
+use crate::lm::sampling::{
     legacy_softmax_sample, rep_pen::SingleBatchedRepPenProcessor, SamplingArgs,
 };
-use crate::models::lm::DualARTransformer;
+use crate::lm::DualARTransformer;
 use candle_core::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use indicatif::{ProgressBar, ProgressStyle};
