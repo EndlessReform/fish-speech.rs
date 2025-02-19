@@ -1,4 +1,3 @@
-use super::text::TextChunk;
 use crate::config::{WhichFishVersion, WhichLM};
 use candle_core::{DType, Device, Error, IndexOp, Result, Tensor};
 use std::path::PathBuf;
@@ -103,70 +102,67 @@ impl<'a> PromptEncoder<'a> {
         let assistant_prompt = self.encode_vq(Some(prompt_tensor))?;
         Tensor::cat(&[user_prompt, assistant_prompt], 1)
     }
-}
 
-pub struct EncodedChunks {
-    pub n_conditioning_tokens: usize,
-    pub chunks: Vec<Tensor>,
-}
+    /// Returns (num_conditioning_tokens, encoded sequence)
+    pub fn encode_sequence(
+        self,
+        chunks: Vec<String>,
+        sysprompt_text: Option<String>,
+        cached_speaker: Option<Tensor>,
+        assume_kv_cache: bool,
+    ) -> Result<(usize, Vec<Tensor>)> {
+        if chunks.len() == 0 {
+            candle_core::bail!("Input text cannot be empty");
+        }
 
-pub fn encode_chunks(
-    tokenizer: &Tokenizer,
-    chunks: Vec<TextChunk>,
-    device: &Device,
-    cached_speaker: Option<Tensor>,
-    sysprompt_text: Option<String>,
-    num_codebooks: usize,
-    model_type: WhichLM,
-    assume_kv_cache: bool,
-) -> Result<EncodedChunks> {
-    let mut encoded_chunks = Vec::new();
+        let mut encoded_chunks = Vec::new();
+        let sysprompt = sysprompt_text
+            .map(|sysprompt_text| self.encode_text("system", Some(&sysprompt_text)))
+            .transpose()?;
 
-    let prompt_encoder = PromptEncoder::new(tokenizer, device, num_codebooks, model_type);
-    let has_sysprompt = match model_type {
-        WhichLM::Fish(WhichFishVersion::Fish1_5) => true,
-        // Make it optional
-        WhichLM::DualAR => sysprompt_text.is_some(),
-        _ => false,
-    };
-    // Default is the sysprompt from the Fish Speech codebase
-    let sysprompt_text = sysprompt_text.unwrap_or("Speak out the provided text.".into());
-    let system_prompt = prompt_encoder.encode_text("system", Some(&sysprompt_text))?;
-    let assistant_start = prompt_encoder.encode_vq(None)?;
-    let n_conditioning_tokens = match &cached_speaker {
-        Some(t) => system_prompt.dim(1)? + t.dim(1)?,
-        _ => 0,
-    };
+        let sysprompt_length = sysprompt
+            .as_ref()
+            .map(|sysprompt| sysprompt.dim(1).unwrap())
+            .unwrap_or(0);
+        let speaker_length = cached_speaker
+            .as_ref()
+            .map(|cached_speaker| cached_speaker.dim(1).unwrap())
+            .unwrap_or(0);
+        let num_conditioning_tokens = sysprompt_length + speaker_length;
 
-    if chunks.len() == 0 {
-        candle_core::bail!("Input text cannot be empty");
-    }
-    for (i, chunk) in chunks.iter().enumerate() {
-        // Format each chunk with the dialogue markers
-        let user_request = prompt_encoder.encode_text("user", Some(&chunk.text))?;
-
-        let mut prompt: Vec<Tensor> = Vec::new();
-        if model_type == WhichLM::DualAR || !assume_kv_cache || i == 0 {
-            if has_sysprompt {
-                prompt.push(system_prompt.clone());
-            };
-            if let Some(conditioning_tokens) = cached_speaker.as_ref() {
-                prompt.push(conditioning_tokens.clone());
-            };
+        let conditioning_tokens = match (sysprompt, cached_speaker) {
+            (Some(sysprompt), Some(cached_speaker)) => {
+                Some(Tensor::cat(&[sysprompt, cached_speaker], 1)?)
+            }
+            (Some(sysprompt), None) => Some(sysprompt),
+            (None, Some(cached_speaker)) => Some(cached_speaker),
+            (None, None) => None,
         };
-        prompt.push(user_request);
-        prompt.push(assistant_start.clone());
+        let assistant_start = self.encode_vq(None)?;
 
-        let encoded = Tensor::cat(&prompt, 1)?;
-        encoded_chunks.push(encoded);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut prompt: Vec<Tensor> = Vec::new();
+
+            if conditioning_tokens.is_some() && (i == 0 || !assume_kv_cache) {
+                prompt.push(conditioning_tokens.clone().unwrap());
+            }
+            prompt.push(self.encode_text("user", Some(&chunk))?);
+            prompt.push(assistant_start.clone());
+
+            let encoded = Tensor::cat(&prompt, 1)?;
+            encoded_chunks.push(encoded);
+        }
+        Ok((num_conditioning_tokens, encoded_chunks))
     }
-
-    Ok(EncodedChunks {
-        n_conditioning_tokens,
-        // This is fine, by invariant it will complete
-        chunks: encoded_chunks,
-    })
 }
+
+// let sysprompt_text = sysprompt_text.unwrap_or("Speak out the provided text.".into());
+// let has_sysprompt = match model_type {
+//         WhichLM::Fish(WhichFishVersion::Fish1_5) => true,
+//         // Make it optional
+//         WhichLM::DualAR => sysprompt_text.is_some(),
+//         _ => false,
+//     };
 
 pub fn load_prompt_text(
     prompt_path: &PathBuf,
@@ -207,11 +203,4 @@ pub fn load_prompt_text(
             )
         }
     }
-}
-
-pub struct SamplingArgs {
-    pub temp: f64,
-    pub top_p: f64,
-    pub top_k: usize,
-    pub repetition_penalty: f32,
 }
