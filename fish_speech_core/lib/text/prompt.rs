@@ -156,14 +156,6 @@ impl<'a> PromptEncoder<'a> {
     }
 }
 
-// let sysprompt_text = sysprompt_text.unwrap_or("Speak out the provided text.".into());
-// let has_sysprompt = match model_type {
-//         WhichLM::Fish(WhichFishVersion::Fish1_5) => true,
-//         // Make it optional
-//         WhichLM::DualAR => sysprompt_text.is_some(),
-//         _ => false,
-//     };
-
 pub fn load_prompt_text(
     prompt_path: &PathBuf,
     device: &Device,

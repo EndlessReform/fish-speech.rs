@@ -1,7 +1,8 @@
-use candle_core::{DType, Device, Shape, Tensor};
+use anyhow;
+use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
-use fish_speech_core::codec::{FireflyCodec, FireflyConfig};
-use fish_speech_core::config::WhichFishVersion;
+use fish_speech_core::codec::{FireflyCodec as FireflyCodecModel, FireflyConfig};
+use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
@@ -9,71 +10,128 @@ fn wrap_err(err: impl std::error::Error) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
 }
 
+trait PyRes<R> {
+    #[allow(unused)]
+    fn w(self) -> PyResult<R>;
+}
+
+/// Copied blindly from rustymimi
+impl<R, E: Into<anyhow::Error>> PyRes<R> for Result<R, E> {
+    fn w(self) -> PyResult<R> {
+        self.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.into().to_string()))
+    }
+}
+
 #[pyclass(unsendable)]
-struct FishSpeechModel {
-    model: FireflyCodec,
+struct FireflyCodec {
+    model: FireflyCodecModel,
+    device: Device,
+    dtype: DType,
 }
 
 #[pymethods]
-impl FishSpeechModel {
+impl FireflyCodec {
+    #[pyo3(signature = (dir, version="1.5", device="cpu", dtype="f32"))]
     #[new]
-    #[pyo3(signature = (repo_id = None))]
-    fn new(repo_id: Option<String>) -> PyResult<Self> {
-        let repo_id = repo_id.unwrap_or_else(|| "fishaudio/fish-speech-1.2".to_string());
-        let api = hf_hub::api::sync::Api::new().map_err(wrap_err)?;
-        let api = api.repo(hf_hub::Repo::with_revision(
-            repo_id,
-            hf_hub::RepoType::Model,
-            "main".to_string(),
-        ));
-        let filename = api
-            .get("firefly-gan-vq-fsq-4x1024-42hz-generator.pth")
-            .map_err(wrap_err)?;
-        let config = FireflyConfig::fish_speech_1_2();
-        let vb = VarBuilder::from_pth(&filename, DType::F32, &Device::Cpu).map_err(wrap_err)?;
-        let model = FireflyCodec::load(config.clone(), vb, WhichFishVersion::Fish1_2)
+    fn new(dir: std::path::PathBuf, version: &str, device: &str, dtype: &str) -> PyResult<Self> {
+        let model_type = match version {
+            "1.5" => WhichModel::Fish1_5,
+            "1.4" => WhichModel::Fish1_4,
+            "1.2" => WhichModel::Fish1_2,
+            v => return Err(PyException::new_err(format!("Unsupported version: {}", v))),
+        };
+        let codec_type = WhichCodec::from_model(model_type);
+
+        // TODO gate this on feature flag
+        let device = match device {
+            "cpu" => Device::Cpu,
+            "cuda" => Device::new_cuda(0).map_err(wrap_err)?,
+            "metal" => Device::new_metal(0).map_err(wrap_err)?,
+            d => return Err(PyException::new_err(format!("Unsupported device: {}", d))),
+        };
+
+        let dtype = match dtype {
+            "f32" => DType::F32,
+            "bf16" => DType::BF16,
+            d => return Err(PyException::new_err(format!("Unsupported dtype: {}", d))),
+        };
+
+        let vb = match model_type {
+            WhichModel::Fish1_2 => VarBuilder::from_pth(
+                "firefly-gan-vq-fsq-4x1024-42hz-generator.pth",
+                dtype,
+                &device,
+            ),
+            _ => unsafe {
+                VarBuilder::from_mmaped_safetensors(
+                    &[dir.join("firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors")],
+                    dtype,
+                    &device,
+                )
+            },
+        }
+        .map_err(wrap_err)?;
+
+        let fish_version = match codec_type {
+            WhichCodec::Fish(version) => version,
+            _ => WhichFishVersion::Fish1_5,
+        };
+        let config = FireflyConfig::get_config_for(fish_version);
+        let model = FireflyCodecModel::load(config.clone(), vb, fish_version)
             .map_err(|err| PyException::new_err(format!("Could not load model: error {}", err)))?;
-        Ok(Self { model })
+        Ok(Self {
+            model,
+            device,
+            dtype,
+        })
     }
 
-    fn forward(&self, py: Python, input: &PyAny) -> PyResult<PyObject> {
-        // Extract shape and data from the input
-        let shape: Vec<usize> = input.getattr("shape")?.extract()?;
-        let flattened_data: Vec<f32> = input.call_method0("flatten")?.extract()?;
-
-        // Create a Candle Tensor from the data
-        let tensor = Tensor::from_slice(&flattened_data, Shape::from(shape), &Device::Cpu)
-            .map_err(wrap_err)?;
-
-        // Forward pass
-        let output = self
-            .model
-            .encode(&tensor)
-            .map_err(wrap_err)?
-            .squeeze(0)
-            .map_err(wrap_err)?;
-        println!("Forward pass done");
-
-        // Convert output Tensor to nested Python list
-        let output_data: Vec<Vec<i64>> = output.to_vec2::<i64>().map_err(wrap_err)?;
-
-        // Convert 2D Vec to Python list of lists
-        let py_output = output_data
-            .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|val| val.into_py(py))
-                    .collect::<Vec<PyObject>>()
-                    .into_py(py)
+    fn encode(&self, pcm_data: numpy::PyReadonlyArray3<f32>) -> PyResult<PyObject> {
+        let py = pcm_data.py();
+        let pcm_data = pcm_data.as_array();
+        let pcm_shape = pcm_data.shape().to_vec();
+        let pcm_data = match pcm_data.to_slice() {
+            None => Err(PyException::new_err("Data must be a contiguous array")),
+            Some(data) => Ok(data),
+        }
+        .map_err(wrap_err)?;
+        let codes = py
+            .allow_threads(|| {
+                let pcm_data = candle_core::Tensor::from_slice(pcm_data, pcm_shape, &self.device)?
+                    .to_dtype(self.dtype)?;
+                let codes = self.model.encode(&pcm_data)?;
+                codes.to_vec3::<u32>()
             })
-            .collect::<Vec<PyObject>>();
+            .w()?;
+        let codes = numpy::PyArray3::from_vec3(py, &codes)?;
+        Ok(codes.into_any().unbind())
+    }
 
-        Ok(py_output.into_py(py))
+    fn decode(&mut self, codes: numpy::PyReadonlyArray3<u32>, py: Python) -> PyResult<PyObject> {
+        let codes = codes.as_array();
+        let codes_shape = codes.shape().to_vec();
+        let codes = match codes.to_slice() {
+            None => Err(PyException::new_err("input data is not contiguous")),
+            Some(data) => Ok(data),
+        }
+        .map_err(wrap_err)?;
+        let pcm = py
+            .allow_threads(|| {
+                let codes = candle_core::Tensor::from_slice(codes, codes_shape, &self.device)?;
+                let pcm = self
+                    .model
+                    .decode(&codes)?
+                    .to_dtype(candle_core::DType::F32)?;
+                pcm.to_vec3::<f32>()
+            })
+            .w()?;
+        let pcm = numpy::PyArray3::from_vec3(py, &pcm)?;
+        Ok(pcm.into_any().unbind())
     }
 }
 
 #[pymodule]
-fn fish_speech(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<FishSpeechModel>()?;
+fn fish_speech(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<FireflyCodec>()?;
     Ok(())
 }
