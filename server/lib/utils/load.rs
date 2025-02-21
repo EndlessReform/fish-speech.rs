@@ -87,7 +87,7 @@ pub fn load_lm(
         }
     };
 
-    let semantic_config = BaseModelArgs::from_json_file(config_path)?;
+    let semantic_config = BaseModelArgs::from_file(config_path)?;
     let tokenizer = Arc::new(Tokenizer::from_file(tokenizer_path).unwrap());
     let lm_version = WhichLM::from_model(args.fish_version);
     let vb_lm = match lm_version {

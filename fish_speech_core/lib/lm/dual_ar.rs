@@ -107,7 +107,7 @@ impl BaseModelArgs {
         }
     }
 
-    pub fn from_json_file(path: PathBuf) -> serde_json::Result<Self> {
+    pub fn from_file(path: PathBuf) -> serde_json::Result<Self> {
         let file = File::open(path).expect("Could not open the file");
         let reader = BufReader::new(file);
         let config: Self = serde_json::from_reader(reader)?;

@@ -959,7 +959,7 @@ dependencies = [
  "fish_speech_core",
  "numpy",
  "pyo3",
- "tokio",
+ "tokenizers",
 ]
 
 [[package]]

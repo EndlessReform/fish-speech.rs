@@ -40,4 +40,4 @@ candle-gqa-kernels = { path = "../candle-gqa-kernels", optional = true }
 serde_json = "1.0.127"
 symphonia = "0.5.4"
 thiserror = "1.0.63"
-tokenizers = "0.20.0"
+tokenizers = { workspace = true }

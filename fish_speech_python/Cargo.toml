@@ -7,13 +7,17 @@ edition = "2021"
 name = "fish_speech"
 crate-type = ["cdylib"]
 
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "fish_speech_core/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal", "fish_speech_core/metal"]
+
 [dependencies]
 anyhow = "1.0.96"
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 numpy = "0.23.0"
 pyo3 = { version = "0.23.0", features = ["extension-module"] }
-tokio = { version = "1.40.0" }
+tokenizers = { workspace = true }
 
 [dependencies.fish_speech_core]
 path = "../fish_speech_core"

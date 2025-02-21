@@ -167,7 +167,7 @@ fn main() -> anyhow::Result<()> {
             args.checkpoint
         ))
     })?;
-    let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
+    let config = BaseModelArgs::from_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]

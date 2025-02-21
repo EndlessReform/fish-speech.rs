@@ -53,7 +53,7 @@ serde_json = "1.0.127"
 symphonia = "0.5.4"
 tempfile = "3.14.0"
 thiserror = "1.0.63"
-tokenizers = "0.20.0"
+tokenizers = { workspace = true }
 tokio = { version = "1.41.1", features = ["full"] }
 tokio-util = "0.7.12"
 tower = "0.5.1"

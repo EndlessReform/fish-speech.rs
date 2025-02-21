@@ -173,11 +173,13 @@ impl<'a> Iterator for SingleBatchGenerator<'a> {
                 } else {
                     a_tensor
                 };
-                x = self
-                    .model
-                    .fast_embeddings
-                    .forward(&a_tensor)?
-                    .unsqueeze(0)?;
+                if codebook_idx != self.model.cfg.num_codebooks - 1 {
+                    x = self
+                        .model
+                        .fast_embeddings
+                        .forward(&a_tensor)?
+                        .unsqueeze(0)?;
+                }
                 codebooks.push(a);
             }
             let codes_tensor = Tensor::from_vec(
