@@ -6,9 +6,16 @@ use fish_speech_core::lm::{dual_ar::TokenConfig, BaseModelArgs, DualARTransforme
 use fish_speech_core::text::prompt::PromptEncoder;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use tokenizers::Tokenizer;
 
 use super::utils::{get_version, wrap_err, PyRes};
+
+#[derive(Debug, FromPyObject)]
+struct AudioSample<'py> {
+    pub text: String,
+    pub audio: numpy::PyReadonlyArray3<'py, f32>,
+}
 
 #[pyclass]
 pub struct LM {
@@ -133,6 +140,41 @@ impl LM {
         let codes = numpy::PyArray3::from_vec3(py, &output)?;
 
         Ok(codes.into_any().unbind())
+    }
+
+    fn create_speaker_prompt(&self, input: Vec<Bound<'_, PyDict>>) -> PyResult<PyObject> {
+        let prompt_encoder = PromptEncoder::new(
+            &self.tokenizer,
+            &self.device,
+            self.model.cfg.num_codebooks,
+            self.model.model_type.clone(),
+        );
+        if input.is_empty() {
+            return Err(PyException::new_err("input is empty"));
+        }
+        let py = input[0].py();
+        let mut prompts: Vec<Tensor> = Vec::with_capacity(input.len());
+        for sample in input {
+            let sample: AudioSample = sample.extract()?;
+            let codes = sample.audio.as_array();
+            let codes_shape = codes.shape().to_vec();
+            let codes = codes
+                .to_slice()
+                .ok_or(PyException::new_err("input data is not contiguous"))?;
+            let codes_tensor =
+                Tensor::from_slice(&codes, codes_shape, &self.device).map_err(wrap_err)?;
+            prompts.push(
+                prompt_encoder
+                    .encode_conditioning_prompt(&sample.text, &codes_tensor)
+                    .map_err(wrap_err)?,
+            );
+        }
+        let prompts = Tensor::cat(&prompts, D::Minus1).map_err(wrap_err)?;
+        // move to npy
+        let prompts = prompts.to_vec3::<u32>().map_err(wrap_err)?;
+        let prompts = numpy::PyArray3::from_vec3(py, &prompts)?;
+
+        Ok(prompts.into_any().unbind())
     }
 }
 
