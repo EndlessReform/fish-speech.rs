@@ -65,16 +65,33 @@ impl LM {
         })
     }
 
-    #[pyo3(signature = (input, sysprompt= Some("Speak out the provided text".into())))]
+    #[pyo3(signature = (input, sysprompt= Some("Speak out the provided text".into()), speaker_prompt=None, temp=0.7, top_p=0.9, top_k=50, repetition_penalty=1.2))]
     fn __call__(
         &mut self,
         input: Bound<'_, PyAny>,
         sysprompt: Option<String>,
+        speaker_prompt: Option<numpy::PyReadonlyArray3<u32>>,
+        temp: f64,
+        top_p: f64,
+        top_k: usize,
+        repetition_penalty: f32,
     ) -> PyResult<PyObject> {
         self.model.clear_slow_layer_caches();
 
         let py = input.py();
         let input_vec: Vec<String> = input.extract()?;
+        let maybe_speaker_prompt = match speaker_prompt {
+            Some(codes) => {
+                let codes = codes.as_array();
+                let codes_shape = codes.shape().to_vec();
+                let codes = codes
+                    .to_slice()
+                    .ok_or(PyException::new_err("input data is not contiguous"))?;
+
+                Some(Tensor::from_slice(codes, codes_shape, &self.device).map_err(wrap_err)?)
+            }
+            None => None,
+        };
 
         let prompt_encoder = PromptEncoder::new(
             &self.tokenizer,
@@ -85,16 +102,15 @@ impl LM {
 
         // TODO: Implement voice encoding logic
         let (num_conditioning_tokens, prompts) = prompt_encoder
-            .encode_sequence(input_vec, sysprompt, None, true)
+            .encode_sequence(input_vec, sysprompt, maybe_speaker_prompt, true)
             .map_err(wrap_err)?;
 
         let mut outputs: Vec<Tensor> = Vec::with_capacity(prompts.len());
-        // TODO: Expose sampling arguments
         let sampling_args = fish_speech_core::lm::sampling::SamplingArgs {
-            temp: 0.0,
-            top_p: 0.85,
-            top_k: 128,
-            repetition_penalty: 1.0,
+            temp,
+            top_p,
+            top_k,
+            repetition_penalty,
         };
         for prompt in prompts {
             let x = py
@@ -119,3 +135,5 @@ impl LM {
         Ok(codes.into_any().unbind())
     }
 }
+
+impl LM {}
