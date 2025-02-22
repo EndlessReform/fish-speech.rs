@@ -15,7 +15,7 @@ on:
             - "candle-gqa-kernels/**"
             - "Cargo.lock"
             - "Cargo.toml"
-            - ".github/workflows/python-wheels.yml" # or whatever you name this file
+            - ".github/workflows/python-wheels.yml"
     pull_request:
         paths:
             - "fish_speech_core/**"
@@ -49,6 +49,7 @@ jobs:
             - run: nvcc -V
             - uses: PyO3/maturin-action@v1
               env:
+                  # https://github.com/huggingface/candle/issues/1516
                   CUDA_COMPUTE_CAP: "80"
               with:
                   target: x86_64
@@ -62,7 +63,7 @@ jobs:
               run: |
                   for wheel in dist/*.whl; do
                     echo "Patching $wheel..."
-                    auditwheel repair --plat manylinux2014_x86_64 --skip-libs dist/*.whl -w dist/
+                    auditwheel repair --plat manylinux2014_x86_64 -w dist/
                   done
 
             - uses: actions/upload-artifact@v4
