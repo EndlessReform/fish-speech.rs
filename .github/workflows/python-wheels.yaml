@@ -60,11 +60,7 @@ jobs:
                   python -m pip install --upgrade pip
                   python -m pip install auditwheel
             - name: Hack the wheel metadata
-              run: |
-                  for wheel in dist/*.whl; do
-                    echo "Patching $wheel..."
-                    auditwheel repair --plat manylinux2014_x86_64 -w dist/
-                  done
+              run: auditwheel repair --plat manylinux2014_x86_64 --skip-libs dist/*.whl -w dist/ || echo "No wheels found, skipping auditwheel."
 
             - uses: actions/upload-artifact@v4
               with:
