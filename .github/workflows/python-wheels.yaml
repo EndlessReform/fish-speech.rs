@@ -24,6 +24,7 @@ on:
             - "Cargo.lock"
             - "Cargo.toml"
             - ".github/workflows/python-wheels.yml"
+    workflow_dispatch:
 
 permissions:
     contents: read
