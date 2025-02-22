@@ -54,7 +54,10 @@ jobs:
                   target: x86_64
                   args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
                   manylinux: off
-
+            - name: Install auditwheel
+              run: |
+                  python -m pip install --upgrade pip
+                  python -m pip install auditwheel
             - name: Hack the wheel metadata
               run: |
                   for wheel in dist/*.whl; do
