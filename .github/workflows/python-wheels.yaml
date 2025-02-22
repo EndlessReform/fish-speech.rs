@@ -24,7 +24,6 @@ on:
             - "Cargo.lock"
             - "Cargo.toml"
             - ".github/workflows/python-wheels.yml"
-    workflow_dispatch:
 
 permissions:
     contents: read
@@ -37,13 +36,13 @@ jobs:
             - uses: actions/setup-python@v5
               with:
                   python-version: 3.x
-            - uses: Jimver/cuda-toolkit@v0.2.14
+            - uses: Jimver/cuda-toolkit@v0.2.21
               with:
                   cuda: "12.1.0" # Just pick one recent version
             - uses: PyO3/maturin-action@v1
               with:
                   target: x86_64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml
+                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
                   manylinux: auto
             - uses: actions/upload-artifact@v4
               with:
@@ -60,7 +59,7 @@ jobs:
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml
+                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features metal
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-macos-arm64
