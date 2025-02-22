@@ -2,6 +2,12 @@
 
 Python bindings for the Fish Speech Candle implementation, using PyO3.
 
+### Installation
+
+TODO: PyPI installation instructions
+
+### Usage
+
 ### Local installation
 
 Requires Python and Rust toolchains.

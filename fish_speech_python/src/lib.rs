@@ -8,7 +8,7 @@ use codec::FireflyCodec;
 use lm::LM;
 
 #[pymodule]
-fn fish_speech(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn fish_speech_rs(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FireflyCodec>()?;
     m.add_class::<LM>()?;
     Ok(())

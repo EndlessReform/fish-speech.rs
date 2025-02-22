@@ -30,6 +30,7 @@ pub async fn server_lm_generate_blocking(
         state.lm.max_new_tokens,
         sampling_args,
         collect_hidden_states,
+        true,
     )
     .context("Failed to generate tokens")?;
 
@@ -45,6 +46,7 @@ pub async fn server_lm_generate_blocking(
             state.lm.max_new_tokens,
             sampling_args,
             collect_hidden_states,
+            true,
         )
         .context("Failed to generate tokens")?;
         if new_tokens.dim(D::Minus1)? != state.lm.max_new_tokens {

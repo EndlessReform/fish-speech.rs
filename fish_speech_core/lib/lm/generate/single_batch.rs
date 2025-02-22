@@ -220,6 +220,7 @@ pub fn generate_blocking_with_hidden(
     max_new_tokens: usize,
     sampling_args: &SamplingArgs,
     collect_hidden_states: bool,
+    show_progress: bool,
 ) -> Result<(Tensor, Option<Tensor>)> {
     // TODO: Handle text output
     let audio_only = true;
@@ -234,14 +235,16 @@ pub fn generate_blocking_with_hidden(
         "Prefill mistakenly thought generation ended. Please check max tokens".into(),
     ))??;
     let dt = start_pp.elapsed();
-    println!(
-        "{:.2}ms prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
-        dt.as_secs_f64() * 1000.0,
-        generator.input_pos,
-        generator.input_pos - n_cached,
-        n_cached,
-        prompt_size as f64 / dt.as_secs_f64()
-    );
+    if show_progress {
+        println!(
+            "{:.2}ms prompt processing: {} tokens ({} new, {} cached, {:.2} tokens/s)",
+            dt.as_secs_f64() * 1000.0,
+            generator.input_pos,
+            generator.input_pos - n_cached,
+            n_cached,
+            prompt_size as f64 / dt.as_secs_f64()
+        );
+    }
 
     // Set up concatenation batch
     let mut previous_tokens: Vec<Tensor> = vec![first_vq_token.codes];
@@ -266,8 +269,10 @@ pub fn generate_blocking_with_hidden(
             hidden_states.push(vq_token.hidden_state);
         }
 
-        spinner.inc(1);
-        spinner.set_message(format!("Tokens: {}", i));
+        if show_progress {
+            spinner.inc(1);
+            spinner.set_message(format!("Tokens: {}", i));
+        }
     }
     let dt = start_decode.elapsed();
 
@@ -283,18 +288,20 @@ pub fn generate_blocking_with_hidden(
         false => None,
     };
 
-    let frame_rate = match model.model_type {
-        WhichLM::DualAR => 12.5,
-        _ => 21.535,
-    };
-    println!(
-        "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
-        out_len,
-        dt.as_secs_f64(),
-        out_len / dt.as_secs_f64(),
-        (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
-        (out_len / frame_rate) / dt.as_secs_f64()
-    );
+    if show_progress {
+        let frame_rate = match model.model_type {
+            WhichLM::DualAR => 12.5,
+            _ => 21.535,
+        };
+        println!(
+            "{} tokens generated in {:.3}s ({:.2} tokens/s, {:.3}ms / token, RTF: {:.3})",
+            out_len,
+            dt.as_secs_f64(),
+            out_len / dt.as_secs_f64(),
+            (dt.as_secs_f64() * 1e3) / (out_len - 1f64),
+            (out_len / frame_rate) / dt.as_secs_f64()
+        );
+    }
     Ok((out_tokens, hidden_states))
 }
 
@@ -303,8 +310,15 @@ pub fn generate_blocking(
     prompt: &Tensor,
     max_new_tokens: usize,
     sampling_args: &SamplingArgs,
+    show_progress: bool,
 ) -> Result<Tensor> {
-    let (out, _) =
-        generate_blocking_with_hidden(model, prompt, max_new_tokens, sampling_args, false)?;
+    let (out, _) = generate_blocking_with_hidden(
+        model,
+        prompt,
+        max_new_tokens,
+        sampling_args,
+        false,
+        show_progress,
+    )?;
     Ok(out)
 }

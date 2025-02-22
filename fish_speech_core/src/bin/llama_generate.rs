@@ -92,7 +92,13 @@ fn generate_long(
         tokenizer.decode(&speaker_tokens, false).unwrap()
     );
 
-    let res = generate_blocking(model, &final_prompt, args.max_new_tokens, &sampling_args)?;
+    let res = generate_blocking(
+        model,
+        &final_prompt,
+        args.max_new_tokens,
+        &sampling_args,
+        true,
+    )?;
     res.write_npy(&args.out_path)?;
 
     Ok(())
