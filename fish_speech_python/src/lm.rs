@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tokenizers::Tokenizer;
 
-use super::utils::{get_version, wrap_err, PyRes};
+use super::utils::{get_device, get_version, wrap_err, PyRes};
 
 #[derive(Debug, FromPyObject)]
 struct AudioSample<'py> {
@@ -39,8 +39,7 @@ impl LM {
             "bf16" => DType::BF16,
             d => return Err(PyException::new_err(format!("Unsupported dtype: {}", d))),
         };
-        // TODO hardware acceleration
-        let device = Device::Cpu;
+        let device = get_device(device)?;
         let vb = match model_type {
             WhichModel::Fish1_2 => {
                 VarBuilder::from_pth(dir.join("model.safetensors"), dtype, &device)

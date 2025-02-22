@@ -5,7 +5,7 @@ use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
-use super::utils::{get_version, wrap_err, PyRes};
+use super::utils::{get_device, get_version, wrap_err, PyRes};
 
 #[pyclass]
 pub struct FireflyCodec {
@@ -23,14 +23,7 @@ impl FireflyCodec {
             .map_err(|_| PyException::new_err(format!("Unsupported model version: {}", version)))?;
         let codec_type = WhichCodec::from_model(model_type);
 
-        // TODO gate this on feature flag
-        let device = match device {
-            "cpu" => Device::Cpu,
-            "cuda" => Device::new_cuda(0).map_err(wrap_err)?,
-            "metal" => Device::new_metal(0).map_err(wrap_err)?,
-            d => return Err(PyException::new_err(format!("Unsupported device: {}", d))),
-        };
-
+        let device = get_device(device)?;
         let dtype = match dtype {
             "f32" => DType::F32,
             "bf16" => DType::BF16,
