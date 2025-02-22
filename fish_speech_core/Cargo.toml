@@ -1,6 +1,6 @@
 [package]
 name = "fish_speech_core"
-version = "0.1.0"
+version = { workspace = true }
 edition = "2021"
 
 [lib]
@@ -20,14 +20,12 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 
 [dependencies]
 anyhow = "1.0.86"
-approx = "0.5.1"
 byteorder = "1.5.0"
 candle-core = { workspace = true }
 candle-flash-attn = { workspace = true, optional = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 clap = { version = "4.5.16", features = ["derive"] }
-hf-hub = "0.3.2"
 indicatif = "0.17.8"
 num = "0.4.3"
 num-traits = "0.2.19"

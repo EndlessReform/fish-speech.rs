@@ -15,7 +15,7 @@ on:
             - "candle-gqa-kernels/**"
             - "Cargo.lock"
             - "Cargo.toml"
-            - ".github/workflows/python-wheels.yml" # or whatever you name this file
+            - ".github/workflows/python-wheels.yml"
     pull_request:
         paths:
             - "fish_speech_core/**"
@@ -27,7 +27,7 @@ on:
     workflow_dispatch:
 
 permissions:
-    contents: read
+    contents: write
 
 jobs:
     linux-cuda:
@@ -37,14 +37,25 @@ jobs:
             - uses: actions/setup-python@v5
               with:
                   python-version: 3.x
-            - uses: Jimver/cuda-toolkit@v0.2.14
+            - uses: Jimver/cuda-toolkit@v0.2.21
+              id: cuda-toolkit
               with:
-                  cuda: "12.1.0" # Just pick one recent version
+                  cuda: "12.6.0"
+
+            - run: |
+                  echo "Installed cuda version is: ${{steps.cuda-toolkit.outputs.cuda}}"
+            - run: |
+                  echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
+            - run: nvcc -V
             - uses: PyO3/maturin-action@v1
+              env:
+                  # https://github.com/huggingface/candle/issues/1516
+                  CUDA_COMPUTE_CAP: "80"
               with:
                   target: x86_64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml
-                  manylinux: auto
+                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
+                  manylinux: off
+
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-linux-cuda
@@ -60,7 +71,7 @@ jobs:
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml
+                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features metal
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-macos-arm64
@@ -72,9 +83,11 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/download-artifact@v4
-            - uses: PyO3/maturin-action@v1
-              env:
-                  MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+            - name: Create Release
+              uses: softprops/action-gh-release@v1
               with:
-                  command: upload
-                  args: --non-interactive --skip-existing wheels-*/*
+                  files: |
+                      wheels-linux-cuda/*
+                      wheels-macos-arm64/*
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
