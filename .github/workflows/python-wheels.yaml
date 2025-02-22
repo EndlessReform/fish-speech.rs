@@ -39,7 +39,7 @@ jobs:
                   python-version: 3.x
             - uses: Jimver/cuda-toolkit@v0.2.21
               with:
-                  cuda: "12.1.0" # Just pick one recent version
+                  cuda: "12.6.0"
             - uses: PyO3/maturin-action@v1
               with:
                   target: x86_64
