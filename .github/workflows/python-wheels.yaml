@@ -27,7 +27,7 @@ on:
     workflow_dispatch:
 
 permissions:
-    contents: read
+    contents: write
 
 jobs:
     linux-cuda:
@@ -55,12 +55,6 @@ jobs:
                   target: x86_64
                   args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
                   manylinux: off
-            - name: Install auditwheel
-              run: |
-                  python -m pip install --upgrade pip
-                  python -m pip install auditwheel
-            - name: Hack the wheel metadata
-              run: auditwheel repair --plat manylinux2014_x86_64 --skip-libs dist/*.whl -w dist/ || echo "No wheels found, skipping auditwheel."
 
             - uses: actions/upload-artifact@v4
               with:
@@ -89,9 +83,11 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/download-artifact@v4
-            - uses: PyO3/maturin-action@v1
-              env:
-                  MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+            - name: Create Release
+              uses: softprops/action-gh-release@v1
               with:
-                  command: upload
-                  args: --non-interactive --skip-existing wheels-*/*
+                  files: |
+                      wheels-linux-cuda/*
+                      wheels-macos-arm64/*
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
