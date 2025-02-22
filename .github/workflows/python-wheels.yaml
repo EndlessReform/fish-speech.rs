@@ -58,7 +58,15 @@ jobs:
               with:
                   target: x86_64
                   args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
-                  manylinux: auto
+                  manylinux: off
+
+            - name: Hack the wheel metadata
+              run: |
+                  for wheel in dist/*.whl; do
+                    echo "Patching $wheel..."
+                    auditwheel repair --plat manylinux2014_x86_64 --skip-libs dist/*.whl -w dist/
+                  done
+
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-linux-cuda
