@@ -1,7 +1,7 @@
 use candle_core::{bail, CustomOp1, Layout, Result, Tensor};
 
 #[derive(Debug, Clone)]
-struct RepeatKV {
+pub struct RepeatKV {
     n_rep: usize,
 }
 

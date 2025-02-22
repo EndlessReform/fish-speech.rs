@@ -61,11 +61,6 @@ fn get_thresholds(script: &Script) -> (usize, usize) {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TextChunk {
-    pub text: String,
-}
-
 fn clean_text(text: &str) -> String {
     let mut result = text.trim().to_string();
 
@@ -132,7 +127,7 @@ fn detect_script(text: &str) -> Script {
     }
 }
 
-pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
+pub fn preprocess_text(text: &str) -> Vec<String> {
     let text = clean_text(text);
     let script = detect_script(&text);
 
@@ -158,16 +153,12 @@ pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
     // Always output first sentence ASAP for TTFT
     let first = sentences[0];
     if first.chars().count() <= split_threshold {
-        chunks.push(TextChunk {
-            text: first.to_string(),
-        });
+        chunks.push(first.to_string());
     } else {
         // If first sentence is huge, reluctantly split on commas
         for piece in first.split_inclusive(&[',', '，', '、'][..]) {
             if !piece.trim().is_empty() {
-                chunks.push(TextChunk {
-                    text: piece.trim().to_string(),
-                });
+                chunks.push(piece.trim().to_string());
             }
         }
     }
@@ -191,9 +182,7 @@ pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
         if sentence_chars > split_threshold {
             // First flush any pending content
             if !current.is_empty() {
-                chunks.push(TextChunk {
-                    text: current.trim().to_string(),
-                });
+                chunks.push(current.trim().to_string());
                 current.clear();
                 chunk_index += 1;
             }
@@ -201,9 +190,7 @@ pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
             // Split the long sentence
             for piece in sentence.split_inclusive(&[',', '，', '、'][..]) {
                 if !piece.trim().is_empty() {
-                    chunks.push(TextChunk {
-                        text: piece.trim().to_string(),
-                    });
+                    chunks.push(piece.trim().to_string());
                     chunk_index += 1;
                 }
             }
@@ -212,9 +199,7 @@ pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
 
         // Try to combine short sentences up to current combine_threshold
         if !current.is_empty() && (current.chars().count() + sentence_chars > combine_threshold) {
-            chunks.push(TextChunk {
-                text: current.trim().to_string(),
-            });
+            chunks.push(current.trim().to_string());
             chunk_index += 1;
             current.clear();
         }
@@ -229,9 +214,7 @@ pub fn preprocess_text(text: &str) -> Vec<TextChunk> {
 
     // Don't forget last chunk
     if !current.is_empty() {
-        chunks.push(TextChunk {
-            text: current.trim().to_string(),
-        });
+        chunks.push(current.trim().to_string());
     }
 
     println!("Split into {} chunks with progressive sizing", chunks.len());

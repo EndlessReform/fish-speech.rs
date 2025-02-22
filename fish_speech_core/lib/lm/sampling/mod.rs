@@ -34,7 +34,7 @@ pub struct SamplingArgs {
 }
 
 /// Simplified for my use case.
-/// Drawn heavily from https://docs.rs/candle-transformers/latest/src/candle_transformers/generation/mod.rs.html#18-21
+/// Drawn heavily from [Candle Transformers](https://docs.rs/candle-transformers/latest/src/candle_transformers/generation/mod.rs.html#18-21)
 ///
 /// Thanks again, Kyutai
 pub struct BatchedLogitsProcessor {

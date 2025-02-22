@@ -3,9 +3,8 @@ use candle_core::{DType, Device, D};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueHint};
 use fish_speech_core::audio as torchaudio;
-use fish_speech_core::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
+use fish_speech_core::codec::{FireflyCodec, FireflyConfig};
 use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
-use fish_speech_core::models::vqgan::{config::FireflyConfig, encoder::FireflyEncoder};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -67,8 +66,6 @@ fn main() -> Result<()> {
         audio.shape().dims3()?.2 as f64 / (config.spec_transform.sample_rate as f64);
     println!("Encoding {:.2}s of audio", audio_duration_sec);
 
-    let spec_transform = LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?;
-    let mels = spec_transform.forward(&audio)?.to_device(&device)?;
     println!("Audio preprocessing complete");
 
     println!("Using device {:?}", device);
@@ -84,14 +81,11 @@ fn main() -> Result<()> {
             )?
         },
     };
-    let encoder = match encoder_version {
-        WhichCodec::Fish(v) => FireflyEncoder::load(vb, &config, &v)?,
-        _ => anyhow::bail!("CLI supports Fish HiFiGAN encoders only; please use server"),
-    };
+    let codec = FireflyCodec::load(config.clone(), vb, fish_version)?;
     println!("Model {:?} loaded", args.fish_version);
 
     let start_decode = Instant::now();
-    let result = encoder.encode(&mels)?.squeeze(0)?;
+    let result = codec.encode(&audio)?.squeeze(0)?;
 
     let dt = start_decode.elapsed();
     println!(

@@ -21,7 +21,7 @@ pub struct FireflyDecoder {
 }
 
 impl FireflyDecoder {
-    pub fn load(vb: &VarBuilder, cfg: &FireflyConfig, model: &WhichFishVersion) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: FireflyConfig, model: &WhichFishVersion) -> Result<Self> {
         let quantizer =
             DownsampleFiniteScalarQuantizer::load(vb.pp("quantizer"), &cfg.quantizer, model)?;
         let head = HiFiGAN::load(vb.pp("head"), &cfg.head, model)?;
@@ -29,7 +29,7 @@ impl FireflyDecoder {
         Ok(Self {
             quantizer,
             head,
-            cfg: cfg.clone(),
+            cfg,
             device: vb.device().clone(),
         })
     }

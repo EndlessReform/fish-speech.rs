@@ -2,7 +2,6 @@ use super::config::FireflyConfig;
 use super::convnext::{ConvNeXtEncoder, ConvNeXtEncoderConfig};
 use super::quantizer::DownsampleFiniteScalarQuantizer;
 use crate::config::WhichFishVersion;
-use anyhow::Result as AnyhowResult;
 use candle_core::{DType, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
@@ -13,11 +12,7 @@ pub struct FireflyEncoder {
 }
 
 impl FireflyEncoder {
-    pub fn load(
-        vb: VarBuilder,
-        cfg: &FireflyConfig,
-        model: &WhichFishVersion,
-    ) -> AnyhowResult<Self> {
+    pub fn load(vb: VarBuilder, cfg: FireflyConfig, model: &WhichFishVersion) -> Result<Self> {
         // TODO: This will have to be fixed w/ rest of config
         let backbone = ConvNeXtEncoder::load(
             vb.pp("backbone"),

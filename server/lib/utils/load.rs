@@ -1,23 +1,17 @@
-use crate::audio::{
-    codec::{Codec, HiFiGANState},
-    mimi,
-};
+use crate::audio::{codec::Codec, mimi};
 use crate::state::LMState;
 use crate::utils::load_speaker_prompts;
 pub use bytes::Bytes;
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 use clap::Parser;
+use fish_speech_core::codec::{FireflyCodec, FireflyConfig};
 use fish_speech_core::{
-    audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig},
     config::{WhichCodec, WhichFishVersion, WhichLM, WhichModel},
-    models::{
-        lm::{
-            dual_ar::{BaseModelArgs, TokenConfig},
-            sampling::SamplingArgs,
-            DualARTransformer,
-        },
-        vqgan::{config::FireflyConfig, decoder::FireflyDecoder, encoder::FireflyEncoder},
+    lm::{
+        dual_ar::{BaseModelArgs, TokenConfig},
+        sampling::SamplingArgs,
+        DualARTransformer,
     },
 };
 pub use futures_util::Stream;
@@ -93,7 +87,7 @@ pub fn load_lm(
         }
     };
 
-    let semantic_config = BaseModelArgs::from_json_file(config_path)?;
+    let semantic_config = BaseModelArgs::from_file(config_path)?;
     let tokenizer = Arc::new(Tokenizer::from_file(tokenizer_path).unwrap());
     let lm_version = WhichLM::from_model(args.fish_version);
     let vb_lm = match lm_version {
@@ -151,57 +145,33 @@ pub fn load_codec(
     num_codebooks: usize,
 ) -> anyhow::Result<(Codec, u32)> {
     let repo = get_model_repo(args.fish_version)?;
-    let weight_name = match args.fish_version {
-        WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth",
-        _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
-    };
 
     let codec_type = WhichCodec::from_model(args.fish_version.clone());
     match codec_type {
         WhichCodec::Fish(version) => {
+            let weight_name = match args.fish_version {
+                WhichModel::Fish1_2 => "firefly-gan-vq-fsq-4x1024-42hz-generator-merged.pth",
+                _ => "firefly-gan-vq-fsq-8x1024-21hz-generator.safetensors",
+            };
             let vb_path = match args.checkpoint.as_ref() {
                 Some(dir) => dir.join(weight_name),
                 None => repo.get(weight_name)?,
             };
-            let vb_decoder = match version {
-                WhichFishVersion::Fish1_2 => VarBuilder::from_pth(vb_path.clone(), dtype, &device)?,
-                _ => unsafe {
-                    VarBuilder::from_mmaped_safetensors(&[vb_path.clone()], dtype, &device)?
-                },
-            };
-            let vb_encoder = match version {
+            let vb = match version {
                 WhichFishVersion::Fish1_2 => VarBuilder::from_pth(vb_path, DType::F32, &device)?,
                 _ => unsafe {
                     VarBuilder::from_mmaped_safetensors(&[vb_path], DType::F32, &device)?
                 },
             };
-            let firefly_config = match args.fish_version {
-                WhichModel::Fish1_2 => FireflyConfig::fish_speech_1_2(),
-                _ => FireflyConfig::fish_speech_1_4(),
-            };
+            let firefly_config = FireflyConfig::get_config_for(version);
 
-            let vocoder_model = Arc::new(FireflyDecoder::load(
-                &vb_decoder.clone(),
-                &firefly_config,
-                &version,
+            let firefly_codec = Arc::new(FireflyCodec::load(
+                firefly_config.clone(),
+                vb.clone(),
+                version,
             )?);
-            let encoder_model = Arc::new(FireflyEncoder::load(
-                vb_encoder.clone(),
-                &firefly_config,
-                &version,
-            )?);
-            let spec_transform =
-                Arc::new(LogMelSpectrogram::load(LogMelSpectrogramConfig::default())?);
-            let sample_rate = spec_transform.sample_rate as u32;
-            Ok((
-                Codec::HiFiGAN(HiFiGANState {
-                    decoder_model: vocoder_model,
-                    encoder_model,
-                    firefly_config: Arc::new(firefly_config),
-                    spec_transform,
-                }),
-                sample_rate,
-            ))
+            let sample_rate = firefly_codec.sample_rate;
+            Ok((Codec::Firefly(firefly_codec), sample_rate))
         }
         WhichCodec::Mimi => {
             let api = Api::new()?;

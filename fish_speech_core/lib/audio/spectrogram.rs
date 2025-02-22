@@ -1,5 +1,4 @@
 use super::stft::Spectrogram;
-use anyhow::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use candle_core::{Result as CandleResult, Tensor, D};
 use num::complex::Complex;
@@ -128,7 +127,7 @@ pub struct LogMelSpectrogram {
 }
 
 impl LogMelSpectrogram {
-    pub fn load(config: LogMelSpectrogramConfig) -> Result<Self> {
+    pub fn load(config: LogMelSpectrogramConfig) -> CandleResult<Self> {
         let mel_buffer = load_mel_buffer((config.n_fft / 2) + 1, *&config.n_mels)?;
 
         Ok(Self {

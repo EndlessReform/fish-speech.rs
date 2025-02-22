@@ -3,13 +3,13 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::config::{WhichFishVersion, WhichLM, WhichModel};
-use fish_speech_core::models::lm::generate::generate_blocking;
-use fish_speech_core::models::lm::sampling::SamplingArgs;
-use fish_speech_core::models::lm::utils::encode::{load_prompt_text, PromptEncoder};
-use fish_speech_core::models::lm::{
+use fish_speech_core::lm::generate::generate_blocking;
+use fish_speech_core::lm::sampling::SamplingArgs;
+use fish_speech_core::lm::{
     dual_ar::{BaseModelArgs, TokenConfig},
     DualARTransformer,
 };
+use fish_speech_core::text::prompt::{load_prompt_text, PromptEncoder};
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -92,7 +92,13 @@ fn generate_long(
         tokenizer.decode(&speaker_tokens, false).unwrap()
     );
 
-    let res = generate_blocking(model, &final_prompt, args.max_new_tokens, &sampling_args)?;
+    let res = generate_blocking(
+        model,
+        &final_prompt,
+        args.max_new_tokens,
+        &sampling_args,
+        true,
+    )?;
     res.write_npy(&args.out_path)?;
 
     Ok(())
@@ -167,7 +173,7 @@ fn main() -> anyhow::Result<()> {
             args.checkpoint
         ))
     })?;
-    let config = BaseModelArgs::from_json_file(checkpoint_dir.join("config.json"))?;
+    let config = BaseModelArgs::from_file(checkpoint_dir.join("config.json"))?;
     let tokenizer = Tokenizer::from_file(checkpoint_dir.join("tokenizer.json")).unwrap();
     // TODO: Figure out why BF16 is breaking on Metal
     #[cfg(feature = "cuda")]

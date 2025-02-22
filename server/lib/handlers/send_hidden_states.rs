@@ -5,7 +5,8 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::{extract::State, http::StatusCode, response::Response, Json};
 use candle_core::Tensor;
-use fish_speech_core::models::lm::utils::{encode::encode_chunks, text::preprocess_text};
+use fish_speech_core::config::WhichModel;
+use fish_speech_core::text::{clean::preprocess_text, prompt::PromptEncoder};
 use serde::Deserialize;
 use std::io::{Cursor, Write};
 use std::sync::Arc;
@@ -34,27 +35,30 @@ pub async fn generate_hidden_states(
     let state = state.clone();
     let num_codebooks = state.lm.model.lock().await.cfg.num_codebooks;
     let chunks = preprocess_text(&request.text);
-    let prompts = encode_chunks(
+
+    let prompt_encoder = PromptEncoder::new(
         &state.lm.tokenizer,
-        chunks,
         &state.device,
-        Some(voice_embedding),
-        None,
         num_codebooks,
         state.lm.model_type,
-        true,
-    )?;
+    );
+    let sysprompt_text = match state.model_type {
+        WhichModel::Fish1_5 => Some("Speak out the provided text.".to_string()),
+        _ => None,
+    };
+    let (n_conditioning_tokens, prompts) =
+        prompt_encoder.encode_sequence(chunks, sysprompt_text, Some(voice_embedding), true)?;
 
     let mut all_hidden_states = Vec::new();
     let mut all_pcm: Vec<f32> = Vec::new();
 
     // Non-streaming path stays relatively simple
-    for prompt in prompts.chunks.iter() {
+    for prompt in prompts.iter() {
         let (semantic_tokens, maybe_hidden) = server_lm_generate_blocking(
             state.clone(),
             prompt,
             &state.lm.default_sampling_args,
-            prompts.n_conditioning_tokens,
+            n_conditioning_tokens,
             true,
         )
         .await?;

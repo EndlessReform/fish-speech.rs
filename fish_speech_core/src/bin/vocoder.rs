@@ -3,9 +3,8 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use fish_speech_core::audio::wav::write_pcm_as_wav;
+use fish_speech_core::codec::{FireflyCodec, FireflyConfig};
 use fish_speech_core::config::{WhichCodec, WhichFishVersion, WhichModel};
-use fish_speech_core::models::vqgan::config::FireflyConfig;
-use fish_speech_core::models::vqgan::decoder::FireflyDecoder;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -79,17 +78,14 @@ fn main() -> Result<()> {
     println!("Loading {:?} model on {:?}", args.fish_version, device);
     let start_load = Instant::now();
     // TODO: Make this configurable from CLI
-    let model = FireflyDecoder::load(&vb, &config, &fish_version)?;
+    let model = FireflyCodec::load(config.clone(), vb.clone(), fish_version)?;
     let dt = start_load.elapsed();
     println!("Model loaded in {:.2}s", dt.as_secs_f64());
 
     let input = Tensor::read_npy(args.input_path)?.to_device(&device)?;
-    let feature_lengths = Tensor::from_slice(&[input.dim(D::Minus1)? as u32], 1, &device)?;
 
     let start_decode = Instant::now();
-    let fake_audios = model
-        .decode(&input.unsqueeze(0)?, &feature_lengths)?
-        .to_dtype(DType::F32)?;
+    let fake_audios = model.decode(&input.unsqueeze(0)?)?;
 
     let dt = start_decode.elapsed();
     println!(

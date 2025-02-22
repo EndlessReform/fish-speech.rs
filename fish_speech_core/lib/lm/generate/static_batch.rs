@@ -1,9 +1,7 @@
 use super::utils::{constrain_probs_to_audio, rescale_semantic_tokens};
 use crate::config::WhichLM;
-use crate::models::lm::sampling::{
-    rep_pen::BatchedRepPenProcessor, BatchedLogitsProcessor, SamplingArgs,
-};
-use crate::models::lm::DualARTransformer;
+use crate::lm::sampling::{rep_pen::BatchedRepPenProcessor, BatchedLogitsProcessor, SamplingArgs};
+use crate::lm::DualARTransformer;
 use candle_core::{IndexOp, Module, Result, Tensor, D};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::{Duration, Instant};
