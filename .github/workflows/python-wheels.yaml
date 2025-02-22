@@ -47,7 +47,14 @@ jobs:
             - run: |
                   echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
             - run: nvcc -V
+            - name: Setup CUDA environment for build
+              run: |
+                  echo "CUDA_PATH=${{steps.cuda-toolkit.outputs.CUDA_PATH}}" >> $GITHUB_ENV
+                  echo "${{steps.cuda-toolkit.outputs.CUDA_PATH}}/bin" >> $GITHUB_PATH
+
             - uses: PyO3/maturin-action@v1
+              env:
+                  NVCC: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}/bin/nvcc
               with:
                   target: x86_64
                   args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
