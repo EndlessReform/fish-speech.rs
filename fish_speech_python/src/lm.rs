@@ -120,7 +120,9 @@ impl LM {
         };
         for prompt in prompts {
             let x = py
-                .allow_threads(|| generate_blocking(&mut self.model, &prompt, 1024, &sampling_args))
+                .allow_threads(|| {
+                    generate_blocking(&mut self.model, &prompt, 1024, &sampling_args, false)
+                })
                 .w()?;
 
             outputs.push(x);
