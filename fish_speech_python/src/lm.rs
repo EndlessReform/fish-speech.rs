@@ -88,7 +88,10 @@ impl LM {
                     .to_slice()
                     .ok_or(PyException::new_err("input data is not contiguous"))?;
 
-                Some(Tensor::from_slice(codes, codes_shape, &self.device).map_err(wrap_err)?)
+                let codes =
+                    Tensor::from_slice(codes, codes_shape, &self.device).map_err(wrap_err)?;
+                let codes = codes.squeeze(0).map_err(wrap_err)?;
+                Some(codes)
             }
             None => None,
         };
