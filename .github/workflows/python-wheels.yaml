@@ -94,4 +94,4 @@ jobs:
                   command: upload
                   args: --non-interactive --skip-existing wheels-linux-cuda/* wheels-macos-arm64/*
               env:
-                  PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+                  MATURIN_PYPI_TOKEN: ${{ secrets.MATURIN_PYPI_TOKEN }}
