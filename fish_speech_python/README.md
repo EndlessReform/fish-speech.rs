@@ -27,11 +27,11 @@ This is the low-level API. You feed it PCM audio, it compresses it into codes, a
 
 ```python
 from fish_speech import FireflyCodec
-from huggingface_hub import snapshot_dir
+from huggingface_hub import snapshot_download
 import numpy as np
 
 # Download weights from Hugging Face
-dir = snapshot_dir("jkeisling/fish-speech-1.5")
+dir = snapshot_download("jkeisling/fish-speech-1.5")
 
 # Load the codec model (set device to "cuda" for speed)
 codec = FireflyCodec(
