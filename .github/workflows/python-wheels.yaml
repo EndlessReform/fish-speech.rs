@@ -60,6 +60,8 @@ jobs:
               run: |
                   pip install auditwheel
                   auditwheel repair dist/*.whl --plat manylinux_2_34_x86_64 -w dist/
+            - name: Remove non-ManyLinux Linux wheels
+              run: find dist/ -type f -name '*linux_x86_64.whl' ! -name '*manylinux*.whl' -delete
 
             - uses: actions/upload-artifact@v4
               with:
