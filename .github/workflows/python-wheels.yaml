@@ -32,11 +32,16 @@ permissions:
 jobs:
     linux-cuda:
         runs-on: ubuntu-22.04
+        strategy:
+            fail-fast: true
+            matrix:
+                python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: "3.9"
+                  python-version: ${{ matrix.python-version }}
+
             - uses: Jimver/cuda-toolkit@v0.2.21
               id: cuda-toolkit
               with:
@@ -59,7 +64,7 @@ jobs:
             - name: Fix Manylinux Compliance
               run: |
                   pip install auditwheel
-                  auditwheel repair dist/*.whl --plat manylinux_2_35_x86_64 -w dist/
+                  auditwheel repair dist/*.whl --plat manylinux_2_34_x86_64 -w dist/
 
             - uses: actions/upload-artifact@v4
               with:
@@ -68,11 +73,16 @@ jobs:
 
     macos-arm:
         runs-on: macos-14
+        strategy:
+            fail-fast: true
+            matrix:
+                python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: "3.9"
+                  python-version: ${{ matrix.python-version }}
+
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64
