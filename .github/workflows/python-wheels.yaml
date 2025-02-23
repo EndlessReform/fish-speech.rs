@@ -76,7 +76,7 @@ jobs:
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64
-                  args: --release --out dist '3.9 3.10 3.11 3.12 3.13' --manifest-path fish_speech_python/Cargo.toml --features metal
+                  args: --release --out dist --interpreter '3.9 3.10 3.11 3.12 3.13' --manifest-path fish_speech_python/Cargo.toml --features metal
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-macos-arm64
