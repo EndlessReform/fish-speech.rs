@@ -31,12 +31,12 @@ permissions:
 
 jobs:
     linux-cuda:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-20.04
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: 3.x
+                  python-version: "3.9"
             - uses: Jimver/cuda-toolkit@v0.2.21
               id: cuda-toolkit
               with:
@@ -49,12 +49,17 @@ jobs:
             - run: nvcc -V
             - uses: PyO3/maturin-action@v1
               env:
+                  # Must be set or bindgen-cuda will look for nvidia-smi which will never work
                   # https://github.com/huggingface/candle/issues/1516
                   CUDA_COMPUTE_CAP: "80"
               with:
                   target: x86_64
                   args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
-                  manylinux: off
+                  manylinux: off # Yes this is terrible, but I need the compiler to see nvcc
+            - name: Fix Manylinux Compliance
+              run: |
+                  pip install auditwheel
+                  auditwheel repair dist/*.whl --plat manylinux_2_31 -w dist/
 
             - uses: actions/upload-artifact@v4
               with:
@@ -67,7 +72,7 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: 3.x
+                  python-version: "3.9"
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64

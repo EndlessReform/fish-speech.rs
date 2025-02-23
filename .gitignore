@@ -1,6 +1,7 @@
 /target
 .venv
 *.safetensors
+*.whl
 checkpoints
 *.npy
 # For debugging purposes; remove before production!
