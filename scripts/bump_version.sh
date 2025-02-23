@@ -51,9 +51,10 @@ rm fish_speech_python/pyproject.toml.bak
 echo "Creating git tag v$NEW_VERSION..."
 git add Cargo.toml Cargo.lock fish_speech_python/pyproject.toml
 git commit -m "chore: bump version from $CURRENT_VERSION to $NEW_VERSION"
-git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION"
+# Not doing this, create tag manually
+# git tag -a "v$NEW_VERSION" -m "Version $NEW_VERSION"
 
-echo "Done! Changes committed and tag created."
+echo "Done! Changes committed."
 echo ""
 echo "Next steps:"
 echo "1. Review the changes: git show HEAD"
