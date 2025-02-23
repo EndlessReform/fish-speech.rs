@@ -6,7 +6,7 @@ members = [
     "server",
 ]
 resolver = "2"
-package.version = "0.2.2"
+package.version = "0.2.3"
 
 [profile.release-with-debug]
 inherits = "release"
