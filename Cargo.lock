@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "candle-gqa-kernels"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen_cuda",
 ]
@@ -914,7 +914,7 @@ checksum = "e8c02a5121d4ea3eb16a80748c74f5549a5665e4c21333c6098f283870fbdea6"
 
 [[package]]
 name = "fish_speech_core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "fish_speech_python"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-stream",
