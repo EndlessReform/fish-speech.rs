@@ -16,7 +16,7 @@ Feel free to raise an issue if you need ARM or Alpine Linux.
 
 ```bash
 # From PyPI
-pip install fish_speech_python
+pip install fish_speech_rs
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ pip install fish_speech_python
 This is the low-level API. You feed it PCM audio, it compresses it into codes, and then decompresses it back into PCM.
 
 ```python
-from fish_speech_rs import FireflyCodec
+from fish_speech import FireflyCodec
 from huggingface_hub import snapshot_dir
 import numpy as np
 
@@ -56,7 +56,7 @@ decoded_pcm = codec.decode(codes)
 The language model (LM) takes text and turns it into speech codes, which you then decode back to audio.
 
 ```python
-from fish_speech_rs import LM, preprocess_text
+from fish_speech import LM, preprocess_text
 from typing import List
 
 # Load the TTS model

@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = "2021"
 
 [lib]
-name = "fish_speech_rs"
+name = "fish_speech"
 crate-type = ["cdylib"]
 
 [features]

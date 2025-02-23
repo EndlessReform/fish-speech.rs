@@ -1,5 +1,5 @@
 [project]
-name = "fish_speech_python"
+name = "fish_speech_rs"
 # Handled by maturin
 description = "High-performance speech synthesis"
 version = "0.2.2"
