@@ -60,6 +60,11 @@ impl FireflyCodec {
         })
     }
 
+    #[getter]
+    pub fn sample_rate(&self) -> u32 {
+        self.model.cfg.spec_transform.sample_rate as u32
+    }
+
     fn encode(&self, pcm_data: numpy::PyReadonlyArray3<f32>) -> PyResult<PyObject> {
         let py = pcm_data.py();
         let pcm_data = pcm_data.as_array();
@@ -73,7 +78,7 @@ impl FireflyCodec {
             .allow_threads(|| {
                 let pcm_data = candle_core::Tensor::from_slice(pcm_data, pcm_shape, &self.device)?
                     .to_dtype(self.dtype)?;
-                let codes = self.model.encode(&pcm_data)?;
+                let codes = self.model.encode(&pcm_data)?.to_dtype(DType::U32)?;
                 codes.to_vec3::<u32>()
             })
             .w()?;
