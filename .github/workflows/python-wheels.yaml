@@ -88,11 +88,10 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/download-artifact@v4
-            - name: Create Release
-              uses: softprops/action-gh-release@v1
+            - name: Publish to PyPI
+              uses: PyO3/maturin-action@v1
               with:
-                  files: |
-                      wheels-linux-cuda/*
-                      wheels-macos-arm64/*
+                  command: upload
+                  args: --non-interactive --skip-existing wheels-linux-cuda/* wheels-macos-arm64/*
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
