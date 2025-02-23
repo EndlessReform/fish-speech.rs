@@ -2,7 +2,7 @@
 name = "fish_speech_rs"
 # Handled by maturin
 description = "High-performance speech synthesis"
-version = "0.2.2"
+version = "0.2.3"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

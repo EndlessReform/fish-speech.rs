@@ -11,12 +11,6 @@ use tokenizers::Tokenizer;
 
 use super::utils::{get_device, get_version, wrap_err, PyRes};
 
-#[derive(Debug, FromPyObject)]
-struct AudioSample<'py> {
-    pub text: String,
-    pub audio: numpy::PyReadonlyArray3<'py, f32>,
-}
-
 #[pyclass]
 pub struct LM {
     model: DualARTransformer,
@@ -94,7 +88,10 @@ impl LM {
                     .to_slice()
                     .ok_or(PyException::new_err("input data is not contiguous"))?;
 
-                Some(Tensor::from_slice(codes, codes_shape, &self.device).map_err(wrap_err)?)
+                let codes =
+                    Tensor::from_slice(codes, codes_shape, &self.device).map_err(wrap_err)?;
+                let codes = codes.squeeze(0).map_err(wrap_err)?;
+                Some(codes)
             }
             None => None,
         };
@@ -156,22 +153,40 @@ impl LM {
         let py = input[0].py();
         let mut prompts: Vec<Tensor> = Vec::with_capacity(input.len());
         for sample in input {
-            let sample: AudioSample = sample.extract()?;
-            let codes = sample.audio.as_array();
+            // Extract "text" as a String
+            let text: String = sample
+                .get_item("text")?
+                .ok_or(PyException::new_err(format!(
+                    "Missing 'text' field in sample"
+                )))?
+                .extract()?;
+            let audio: numpy::PyReadonlyArray3<u32> = sample
+                .get_item("codes")?
+                .ok_or(PyException::new_err(format!(
+                    "Missing 'codes' field in sample (encoded audio only)"
+                )))?
+                .extract()?;
+            let codes = audio.as_array();
             let codes_shape = codes.shape().to_vec();
             let codes = codes
                 .to_slice()
                 .ok_or(PyException::new_err("input data is not contiguous"))?;
             let codes_tensor =
                 Tensor::from_slice(&codes, codes_shape, &self.device).map_err(wrap_err)?;
+            let codes_tensor = if codes_tensor.rank() == 3 {
+                codes_tensor.squeeze(0).map_err(wrap_err)?
+            } else {
+                codes_tensor
+            };
             prompts.push(
                 prompt_encoder
-                    .encode_conditioning_prompt(&sample.text, &codes_tensor)
+                    .encode_conditioning_prompt(&text, &codes_tensor)
                     .map_err(wrap_err)?,
             );
         }
         let prompts = Tensor::cat(&prompts, D::Minus1).map_err(wrap_err)?;
         // move to npy
+        let prompts = prompts.unsqueeze(0).map_err(wrap_err)?;
         let prompts = prompts.to_vec3::<u32>().map_err(wrap_err)?;
         let prompts = numpy::PyArray3::from_vec3(py, &prompts)?;
 
