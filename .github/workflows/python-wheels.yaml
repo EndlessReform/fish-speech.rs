@@ -32,16 +32,11 @@ permissions:
 jobs:
     linux-cuda:
         runs-on: ubuntu-22.04
-        strategy:
-            fail-fast: true
-            matrix:
-                python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: ${{ matrix.python-version }}
-
+                  python-version: "3.9"
             - uses: Jimver/cuda-toolkit@v0.2.21
               id: cuda-toolkit
               with:
@@ -59,7 +54,7 @@ jobs:
                   CUDA_COMPUTE_CAP: "80"
               with:
                   target: x86_64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features cuda
+                  args: --release --out dist --interpreter '3.9 3.10 3.11 3.12 3.13' --manifest-path fish_speech_python/Cargo.toml --features cuda
                   manylinux: off # Yes this is terrible, but I need the compiler to see nvcc
             - name: Fix Manylinux Compliance
               run: |
@@ -73,20 +68,15 @@ jobs:
 
     macos-arm:
         runs-on: macos-14
-        strategy:
-            fail-fast: true
-            matrix:
-                python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
               with:
-                  python-version: ${{ matrix.python-version }}
-
+                  python-version: "3.9"
             - uses: PyO3/maturin-action@v1
               with:
                   target: aarch64
-                  args: --release --out dist --find-interpreter --manifest-path fish_speech_python/Cargo.toml --features metal
+                  args: --release --out dist '3.9 3.10 3.11 3.12 3.13' --manifest-path fish_speech_python/Cargo.toml --features metal
             - uses: actions/upload-artifact@v4
               with:
                   name: wheels-macos-arm64
