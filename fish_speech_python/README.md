@@ -16,9 +16,10 @@ OS + hardware:
 - Linux:
   - CPU: x86_64, glibc 2.34+
     - Example: Ubuntu 22.04 IS supported, Ubuntu 20.04 IS NOT supported
-  - GPU: Nvidia CUDA 12+ with compute capability >= 8.0 (RTX 30 series+, A100 series+)
+  - GPU: Nvidia CUDA 11.8+ with compute capability >= 8.0 (RTX 30 series+, A100 series+)
     - Example: 2080 Ti is NOT supported (Turing)
     - Example: RX5700 XT is NOT supported (AMD)
+    - NOTE: We don't currently have a CUDA build matrix, so it's compiled with CUDA 11.8; sorry. It should be compatible with newer CUDA versions, but please use the Rust runtime if full optimization is required.
 - macOS (M1+, 14.0+ (Monterey))
 
 Windows and AMD hardware will never be supported, so don't ask.
