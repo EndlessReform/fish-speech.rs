@@ -23,12 +23,17 @@ impl FireflyCodec {
             .map_err(|_| PyException::new_err(format!("Unsupported model version: {}", version)))?;
         let codec_type = WhichCodec::from_model(model_type);
 
-        let device = get_device(device)?;
-        let dtype = match dtype {
-            "f32" => DType::F32,
-            "bf16" => DType::BF16,
-            d => return Err(PyException::new_err(format!("Unsupported dtype: {}", d))),
+        let dtype = match (dtype, device) {
+            ("bf16", "cuda") | ("bf16", "metal") => DType::BF16,
+            ("f32", _) => DType::F32,
+            (d, _) => {
+                return Err(PyException::new_err(format!(
+                    "Unsupported dtype on device {}: {}",
+                    device, d
+                )))
+            }
         };
+        let device = get_device(device)?;
 
         let vb = match model_type {
             WhichModel::Fish1_2 => VarBuilder::from_pth(
