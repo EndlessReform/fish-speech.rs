@@ -334,8 +334,8 @@ impl Attention {
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
         // TODO: Fix op to handle bsz > 1
         #[cfg(feature = "cuda")]
-        let key_states = match bsz {
-            1 => repeat_kv(&key_states, n_rep)?,
+        let key_states = match (bsz, key_states.device()) {
+            (1, &Device::Cuda(_)) => repeat_kv(&key_states, n_rep)?,
             _ => key_states
                 .unsqueeze(2)?
                 .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
@@ -348,8 +348,8 @@ impl Attention {
             .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
             .reshape((bsz, self.n_local_heads * n_rep, kv_seqlen, self.head_dim))?;
         #[cfg(feature = "cuda")]
-        let value_states = match bsz {
-            1 => repeat_kv(&value_states, n_rep)?,
+        let value_states = match (bsz, value_states.device()) {
+            (1, &Device::Cuda(_)) => repeat_kv(&value_states, n_rep)?,
             _ => value_states
                 .unsqueeze(2)?
                 .expand((bsz, self.n_local_heads, n_rep, kv_seqlen, self.head_dim))?
