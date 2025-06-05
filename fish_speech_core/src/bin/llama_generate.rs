@@ -181,8 +181,8 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cuda"))]
     let dtype = DType::F32;
 
-    let fish_version = WhichLM::from_model(args.fish_version);
-    let vb = match fish_version {
+    let lm_version = WhichLM::from_model(args.fish_version);
+    let vb = match lm_version {
         WhichLM::Fish(WhichFishVersion::Fish1_2) => {
             VarBuilder::from_pth(checkpoint_dir.join("model.pth"), dtype, &device)?
         }
@@ -195,11 +195,11 @@ fn main() -> anyhow::Result<()> {
         },
     };
 
-    let token_config = TokenConfig::new(fish_version, &tokenizer, &config)?;
+    let token_config = TokenConfig::new(lm_version, &tokenizer, &config)?;
     let mut model =
-        DualARTransformer::load(&vb, &config, &token_config, fish_version.clone()).unwrap();
+        DualARTransformer::load(&vb, &config, &token_config, lm_version.clone()).unwrap();
     println!("Model loaded to {:?}", device);
-    generate_long(&mut model, &tokenizer, &args, &device, fish_version)?;
+    generate_long(&mut model, &tokenizer, &args, &device, lm_version)?;
 
     Ok(())
 }

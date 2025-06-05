@@ -49,8 +49,8 @@ fn main() -> Result<()> {
 
     let encoder_version = WhichCodec::from_model(args.fish_version.clone());
     let fish_version = match encoder_version {
-        WhichCodec::Mimi => anyhow::bail!("Only official Fish HiFiGAN supported"),
         WhichCodec::Fish(v) => v,
+        _ => anyhow::bail!("Only official Fish HiFiGAN supported"),
     };
     let config = match fish_version {
         WhichFishVersion::Fish1_2 => FireflyConfig::fish_speech_1_2(),

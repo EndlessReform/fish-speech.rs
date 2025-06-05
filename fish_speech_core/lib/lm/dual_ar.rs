@@ -55,10 +55,23 @@ impl TokenConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BaseModelArgs {
+    #[serde(default)]
+    pub attention_o_bias: Option<bool>,
+    #[serde(default)]
+    pub attention_qk_norm: Option<bool>,
     pub attention_qkv_bias: bool,
     pub codebook_size: usize,
     pub dim: usize,
     pub dropout: f32,
+
+    // s1-mini specific, False by default
+    #[serde(default)]
+    pub fast_layer_attn_qkv_bias: Option<bool>,
+    #[serde(default)]
+    pub fast_layer_attn_o_bias: Option<bool>,
+    #[serde(default)]
+    pub fast_layer_attn_qk_norm: Option<bool>,
+
     pub head_dim: usize,
     pub initializer_range: f32,
     pub intermediate_size: Option<usize>,
@@ -74,6 +87,8 @@ pub struct BaseModelArgs {
     pub tie_word_embeddings: bool,
     pub use_gradient_checkpointing: bool,
     pub vocab_size: usize,
+
+    // Config for custom models
     #[serde(default)]
     pub depthwise_wte: Option<bool>,
     #[serde(default)]
@@ -83,6 +98,11 @@ pub struct BaseModelArgs {
 impl BaseModelArgs {
     pub fn fish_speech_1_2() -> Self {
         Self {
+            attention_o_bias: Some(false),
+            attention_qk_norm: Some(false),
+            fast_layer_attn_qkv_bias: None,
+            fast_layer_attn_o_bias: None,
+            fast_layer_attn_qk_norm: None,
             model_type: "base".to_string(),
             vocab_size: 32000,
             n_layer: 24,
@@ -202,6 +222,8 @@ pub struct Attention {
     wqkv: Linear,
     wo: Linear,
     kv_cache: Option<(Tensor, Tensor)>,
+    q_norm: Option<RmsNorm>,
+    k_norm: Option<RmsNorm>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -223,6 +245,20 @@ impl Attention {
         let wo = Linear::new(vb.get((config.dim, config.dim), "wo.weight")?, None);
 
         let kv_cache = None;
+        let q_norm = match config.attention_qk_norm {
+            Some(true) => Some(RmsNorm::new(
+                vb.get((config.dim, config.dim), "q_norm.weight")?,
+                config.norm_eps,
+            )),
+            _ => None,
+        };
+        let k_norm = match config.attention_qk_norm {
+            Some(true) => Some(RmsNorm::new(
+                vb.get((config.dim, config.dim), "k_norm.weight")?,
+                config.norm_eps,
+            )),
+            _ => None,
+        };
 
         Ok(Self {
             n_head: config.n_head,
@@ -233,6 +269,8 @@ impl Attention {
             wo,
             // TODO configure this, improve cache handling
             kv_cache,
+            q_norm,
+            k_norm,
         })
     }
 
@@ -305,6 +343,18 @@ impl Attention {
         let value_states = value_states
             .reshape((bsz, seqlen, self.n_local_heads, self.head_dim))?
             .transpose(1, 2)?;
+
+        // QK norm for s1-mini
+        let query_states = if let Some(q_norm) = &self.q_norm {
+            q_norm.forward(&query_states)?
+        } else {
+            query_states
+        };
+        let key_states = if let Some(k_norm) = &self.k_norm {
+            k_norm.forward(&key_states)?
+        } else {
+            key_states
+        };
 
         let (query_states, key_states) = self.apply_rotary_emb_qkv(
             &query_states.contiguous()?,

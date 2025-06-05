@@ -2,11 +2,11 @@
 
 <img src="docs/fish_hero.png" alt="Fish Speech.rs" width="512" />
 
-A simple, fast text-to-speech inference server for [Fish Speech](https://github.com/fishaudio/fish-speech) 1.5 and below, written in pure Rust.
+A simple, fast text-to-speech inference server for [Fish Speech](https://github.com/fishaudio/fish-speech) s1-mini and below, written in pure Rust.
 
 Features:
 - **Simple inference:** OpenAI-compatible server with streaming audio and WAV
-- **Backwards compatibility:** now the only project still supporting Fish Speech 1.4 and 1.2 SFT
+- **Backwards compatibility:** now the only project still supporting Fish Speech 1.5, 1.4, and 1.2 SFT
 - **Reliable installation:** Compiles to single ~15MB static binary, no Python environment or `torch.compile` cache failures
 
 

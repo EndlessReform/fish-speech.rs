@@ -48,9 +48,9 @@ pub struct Args {
 }
 
 pub fn get_model_repo(model_type: WhichModel) -> anyhow::Result<ApiRepo> {
-    // PathBuf::from("checkpoints/fish-1.5")
     let api = Api::new()?;
     let repo_name = match model_type {
+        WhichModel::S1Mini => "jkeisling/s1-mini",
         WhichModel::Fish1_5 => "jkeisling/fish-speech-1.5",
         WhichModel::Fish1_4 => "jkeisling/fish-speech-1.4",
         WhichModel::Fish1_2 => "fishaudio/fish-speech-1.2-sft",
@@ -172,6 +172,9 @@ pub fn load_codec(
             )?);
             let sample_rate = firefly_codec.sample_rate;
             Ok((Codec::Firefly(firefly_codec), sample_rate))
+        }
+        WhichCodec::DAC => {
+            todo!()
         }
         WhichCodec::Mimi => {
             let api = Api::new()?;

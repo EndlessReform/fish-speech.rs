@@ -43,8 +43,8 @@ fn main() -> Result<()> {
 
     let encoder_version = WhichCodec::from_model(args.fish_version.clone());
     let fish_version = match encoder_version {
-        WhichCodec::Mimi => anyhow::bail!("Only official Fish HiFiGAN supported"),
         WhichCodec::Fish(v) => v,
+        _ => anyhow::bail!("Only official Fish HiFiGAN supported"),
     };
     // CPU preprocessing for now
     let (mut audio, sr) = torchaudio::load(args.src_audio, &Device::Cpu)?;

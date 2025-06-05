@@ -20,18 +20,23 @@ pub enum WhichModel {
 
     #[value(name = "dual_ar")]
     DualAR,
+
+    #[value(name = "s1-mini")]
+    S1Mini,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhichCodec {
     Fish(WhichFishVersion),
     Mimi,
+    DAC,
 }
 
 impl WhichCodec {
     pub fn from_model(model: WhichModel) -> Self {
         match model {
             WhichModel::DualAR => Self::Mimi,
+            WhichModel::S1Mini => Self::DAC,
             WhichModel::Fish1_2 => Self::Fish(WhichFishVersion::Fish1_2),
             WhichModel::Fish1_4 => Self::Fish(WhichFishVersion::Fish1_4),
             WhichModel::Fish1_5 => Self::Fish(WhichFishVersion::Fish1_5),
@@ -42,6 +47,7 @@ impl WhichCodec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhichLM {
     Fish(WhichFishVersion),
+    S1Mini,
     DualAR,
 }
 
@@ -49,6 +55,7 @@ impl WhichLM {
     pub fn from_model(model: WhichModel) -> Self {
         match model {
             WhichModel::DualAR => Self::DualAR,
+            WhichModel::S1Mini => Self::S1Mini,
             WhichModel::Fish1_2 => Self::Fish(WhichFishVersion::Fish1_2),
             WhichModel::Fish1_4 => Self::Fish(WhichFishVersion::Fish1_4),
             WhichModel::Fish1_5 => Self::Fish(WhichFishVersion::Fish1_5),
