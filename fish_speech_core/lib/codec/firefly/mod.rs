@@ -1,11 +1,21 @@
 use candle_core::{DType, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-use super::config::FireflyConfig;
-use super::decoder::FireflyDecoder;
-use super::encoder::FireflyEncoder;
+pub mod config;
+mod convnet;
+mod convnext;
+mod decoder;
+mod encoder;
+mod fsq;
+mod grouped_residual_fsq;
+mod hifi_gan;
+mod quantizer;
+
 use crate::audio::spectrogram::{LogMelSpectrogram, LogMelSpectrogramConfig};
 use crate::config::WhichFishVersion;
+use config::FireflyConfig;
+use decoder::FireflyDecoder;
+use encoder::FireflyEncoder;
 
 pub struct FireflyCodec {
     // Fields and methods go here
